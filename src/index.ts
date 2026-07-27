@@ -132,6 +132,7 @@ export {
   getLabel,
   isDieCut,
   isEndless,
+  labelFitsModel,
   labelIdentifiers,
   labelName,
   labelWorksWithModel,

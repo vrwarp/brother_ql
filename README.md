@@ -8,7 +8,7 @@ This is a TypeScript port of the [`brother_ql`](./PYTHON.md) Python package, whi
 stays in this repository as the reference implementation. Every byte the port emits
 is checked against it: `scripts/generate_fixtures.py` drives the Python code to
 produce complete print jobs, and the test suite replays them and compares byte for
-byte across all 19 printer models.
+byte across all 19 printer models and all 27 label types.
 
 > **Status:** the protocol and imaging layers are verified against the Python
 > implementation, and the transport layer is covered by tests against a scripted
@@ -59,7 +59,13 @@ All 19 models from the Python package, with their capabilities:
 
 All 27 label types are supported: continuous tape from 12 mm to 103 mm, die-cut
 labels, round die-cut labels, and the black/red DK-22251 tape (`62red`) on the
-QL-800 series. `labelsForModel(model)` returns the ones a given printer can use.
+QL-800 series.
+
+`labelsForModel(model)` returns the ones a given printer can actually use. It
+applies both the label's own model restrictions and a physical fit check, so it
+will not offer 62 mm media for a P-touch whose head is 128 dots across. Asking
+for an impossible combination anyway raises a `RasterError` that names both
+sizes.
 
 ## Browser and platform support
 
@@ -218,10 +224,15 @@ Three behaviours were changed on purpose, because the Python versions are bugs:
 
 ```bash
 npm install
-npm test           # 281 tests, including the golden comparison
+npm test            # ~1000 tests, including the byte-for-byte golden comparison
+npm run test:coverage
 npm run typecheck
-npm run demo:dev   # the demo at http://localhost:5173 (localhost is a secure context)
+npm run demo:dev    # the demo at http://localhost:5173 (localhost is a secure context)
 ```
+
+Coverage sits near 100% of statements for everything except `src/browser`, which
+is canvas work with no faithful stand-in under Node; that is covered by driving
+the demo in a real browser.
 
 Regenerating the golden fixtures needs Python and the pinned Pillow:
 

@@ -43,3 +43,8 @@ Changes to the Python package are not tracked here.
 - Images are resized by the caller (the browser adapter) rather than silently
   inside the conversion step, keeping the core deterministic and platform
   independent.
+- `labelsForModel()` additionally excludes labels that cannot physically fit the
+  print head. Nothing upstream prevents pairing 62 mm media with a P-touch whose
+  head is 128 dots across; doing so produced a silently cropped label there, and
+  an out of bounds write here. It is now reported as a `RasterError` naming both
+  sizes, and such combinations are kept out of the list a user picks from.

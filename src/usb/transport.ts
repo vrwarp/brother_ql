@@ -336,7 +336,8 @@ export class UsbTransport extends TypedEventTarget<TransportEvents> {
       return await Promise.race([this.device.transferOut(endpointNumber, payload), watchdog]);
     } catch (error) {
       if (error instanceof TransferTimeoutError) throw error;
-      if (this.#state !== 'open') throw new DeviceDisconnectedError(error);
+      // Any other rejection from a bulk write means the device is gone: either
+      // it was unplugged, or it was closed underneath us.
       throw new DeviceDisconnectedError(error);
     } finally {
       if (timer !== undefined) clearTimeout(timer);

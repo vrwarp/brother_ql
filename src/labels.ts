@@ -11,7 +11,7 @@
  */
 
 import { UnknownLabelError } from './errors.js';
-import type { Model } from './models.js';
+import { resolveModel, type Model } from './models.js';
 
 /**
  * The form factor of a label. Brother QL media comes either die-cut
@@ -144,16 +144,41 @@ export function resolveLabel(label: string | Label): Label {
   return typeof label === 'string' ? getLabel(label) : label;
 }
 
-/** Whether a label can be printed on the given model. */
+/**
+ * Whether a label's restriction list allows the given model.
+ *
+ * This mirrors the Python `works_with_model` exactly, which only consults the
+ * restriction list. It does not consider whether the label physically fits —
+ * see {@link labelFitsModel}.
+ */
 export function labelWorksWithModel(label: Label, model: Model | string): boolean {
   if (label.restrictedToModels.length === 0) return true;
   const identifier = typeof model === 'string' ? model : model.identifier;
   return label.restrictedToModels.includes(identifier);
 }
 
-/** All labels usable with the given model. */
+/**
+ * Whether the label physically fits the model's print head.
+ *
+ * The printable area plus the right margin has to land inside the head. The
+ * restriction lists alone do not guarantee this: they cover the wide-format
+ * QL labels, but nothing stops a 62 mm label being paired with a P-touch whose
+ * head is 128 dots across, which cannot print it.
+ */
+export function labelFitsModel(label: Label, model: Model): boolean {
+  const headWidth = model.numberBytesPerRow * 8;
+  return label.dotsPrintable[0] + label.offsetR + model.additionalOffsetR <= headWidth;
+}
+
+/**
+ * All labels that can actually be printed on the given model.
+ *
+ * Applies both the restriction list and the physical fit check, so the result
+ * is safe to offer a user directly.
+ */
 export function labelsForModel(model: Model | string): Label[] {
-  return ALL_LABELS.filter((l) => labelWorksWithModel(l, model));
+  const resolved = resolveModel(model);
+  return ALL_LABELS.filter((l) => labelWorksWithModel(l, resolved) && labelFitsModel(l, resolved));
 }
 
 /** Whether the label is one of the two endless kinds. */

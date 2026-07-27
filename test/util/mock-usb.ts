@@ -91,6 +91,8 @@ export class MockUsbDevice implements MinimalUsbDevice {
   readonly #options: MockUsbDeviceOptions;
   #readScript: ReadScriptEntry[];
   #writeCount = 0;
+  /** Resolved whenever the script gains an entry, so a parked read wakes at once. */
+  #readWaiters: Array<() => void> = [];
 
   constructor(options: MockUsbDeviceOptions = {}) {
     this.#options = options;
@@ -117,6 +119,29 @@ export class MockUsbDevice implements MinimalUsbDevice {
   /** Queue more data for the reader to pick up. */
   pushRead(bytes: Uint8Array): void {
     this.#readScript.push({ kind: 'data', bytes });
+    this.#wakeReaders();
+  }
+
+  #wakeReaders(): void {
+    const waiters = this.#readWaiters;
+    this.#readWaiters = [];
+    for (const wake of waiters) wake();
+  }
+
+  /** Park until there is something to read, the device closes, or time passes. */
+  #waitForRead(): Promise<void> {
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        const index = this.#readWaiters.indexOf(wake);
+        if (index !== -1) this.#readWaiters.splice(index, 1);
+        resolve();
+      }, 1);
+      const wake = (): void => {
+        clearTimeout(timer);
+        resolve();
+      };
+      this.#readWaiters.push(wake);
+    });
   }
 
   /** Everything written so far, concatenated. */
@@ -141,6 +166,7 @@ export class MockUsbDevice implements MinimalUsbDevice {
     this.#opened = false;
     // Closing unparks any waiting reader, as the real API does.
     this.#readScript = [];
+    this.#wakeReaders();
   }
 
   async selectConfiguration(configurationValue: number): Promise<void> {
@@ -169,7 +195,7 @@ export class MockUsbDevice implements MinimalUsbDevice {
       if (!this.#opened) throw new DOMException('The device was closed.', 'NetworkError');
 
       if (this.#options.deferReadsUntilWrite && this.#writeCount === 0) {
-        await new Promise((resolve) => setTimeout(resolve, 1));
+        await this.#waitForRead();
         continue;
       }
 
@@ -177,7 +203,7 @@ export class MockUsbDevice implements MinimalUsbDevice {
 
       if (!entry) {
         // Nothing scripted: wait for something to be pushed, or for a close.
-        await new Promise((resolve) => setTimeout(resolve, 1));
+        await this.#waitForRead();
         continue;
       }
 
@@ -192,8 +218,8 @@ export class MockUsbDevice implements MinimalUsbDevice {
         case 'silence':
           // Model a printer that has gone quiet: never produce data, but still
           // unpark when the device is closed.
-          await new Promise((resolve) => setTimeout(resolve, 1));
           this.#readScript.unshift(entry);
+          await new Promise((resolve) => setTimeout(resolve, 1));
           continue;
         case 'disconnect':
           throw new DOMException('The device was disconnected.', 'NetworkError');
@@ -213,6 +239,11 @@ export class MockUsbDevice implements MinimalUsbDevice {
               (data as ArrayBufferView).byteOffset + (data as ArrayBufferView).byteLength,
             ),
           );
+
+    // A real bulk transfer takes time on the wire. Yielding here lets a reply
+    // to an earlier chunk reach the reader before the next chunk goes out,
+    // which is what makes between-chunk error handling observable.
+    await new Promise((resolve) => setTimeout(resolve, 0));
 
     this.#writeCount += 1;
     if (this.#options.stallFirstWrite && this.#writeCount === 1) {

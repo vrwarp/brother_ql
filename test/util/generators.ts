@@ -117,6 +117,10 @@ function allblack(width: number, height: number): Uint8Array {
   return px;
 }
 
+function allwhite(width: number, height: number): Uint8Array {
+  return new Uint8Array(width * height * 4).fill(255);
+}
+
 function noise(width: number, height: number, params: Record<string, number>): Uint8Array {
   const px = new Uint8Array(width * height * 4);
   let s = (params.seed ?? 1234) >>> 0;
@@ -142,6 +146,7 @@ const GENERATORS: Record<string, GeneratorFn> = {
   rgbsweep: (w, h) => rgbsweep(w, h),
   alphadisc: (w, h) => alphadisc(w, h),
   allblack: (w, h) => allblack(w, h),
+  allwhite: (w, h) => allwhite(w, h),
   noise,
 };
 

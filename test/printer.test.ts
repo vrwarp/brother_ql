@@ -8,6 +8,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { analyzeInstructions } from '../src/analyze.js';
+import { createJob } from '../src/convert.js';
 import {
   BusyError,
   DeviceDisconnectedError,
@@ -204,22 +205,27 @@ describe('failures', () => {
   });
 
   it('stops sending as soon as an error arrives mid-job', async () => {
-    // The printer complains after the first chunk is written.
+    // The printer complains as soon as it receives anything.
     const device = new MockUsbDevice({
       onWrite: (_chunk, self) => self.pushRead(STATUS_ERROR_COVER_OPEN),
     });
     const printer = new BrotherQLPrinter(device, { model: 'QL-820NWB', chunkSize: 512 });
     await printer.open();
 
-    // A tall label, so the job needs many chunks.
+    // A tall label, so the job spans many chunks and there is something to
+    // abandon. Build the same job here to compare against what was sent.
+    const source = image(696, 400);
+    const fullJob = createJob('QL-820NWB', [source], '62');
+
     await expect(
-      printer.print(image(696, 400), { label: '62', statusTimeoutMs: 200 }),
+      printer.print(source, { label: '62', statusTimeoutMs: 200 }),
     ).rejects.toBeInstanceOf(PrinterStatusError);
 
-    // Give the reader a moment, then confirm the job was abandoned early.
+    // The point of the between-chunks check: the rest of the job is dropped
+    // rather than pushed at a printer that cannot print it.
     const written = device.writtenBytes().length;
     expect(written).toBeGreaterThan(0);
-    expect(written).toBeLessThan(696 * 400);
+    expect(written).toBeLessThan(fullJob.length);
 
     await printer.close();
   });

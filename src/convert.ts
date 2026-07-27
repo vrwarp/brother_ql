@@ -34,6 +34,7 @@ import {
   MEDIA_TYPE_CONTINUOUS,
   MEDIA_TYPE_DIE_CUT,
   MEDIA_TYPE_NONE,
+  type RasterOptions,
 } from './raster.js';
 
 export interface ConvertOptions {
@@ -139,6 +140,19 @@ export function prepareImage(
 
   const devicePixelWidth = pixelWidth(resolvedModel);
   const rightMarginDots = resolvedLabel.offsetR + resolvedModel.additionalOffsetR;
+
+  // The restriction lists cover the wide-format QL labels, but nothing stops a
+  // caller pairing, say, a 62 mm label with a P-touch whose head is 128 dots
+  // across. Catch that here rather than letting it surface as an out of bounds
+  // write while pasting, or as a silently cropped label.
+  if (resolvedLabel.dotsPrintable[0] + rightMarginDots > devicePixelWidth) {
+    throw new RasterError(
+      `Label '${resolvedLabel.identifier}' needs ${resolvedLabel.dotsPrintable[0]} dots plus ` +
+        `${rightMarginDots} of margin, which does not fit the ${devicePixelWidth} dot print head ` +
+        `of the ${resolvedModel.identifier}.`,
+      { expected: [devicePixelWidth, 0], actual: [resolvedLabel.dotsPrintable[0], 0] },
+    );
+  }
   const dotsPrintable = resolvedLabel.dotsPrintable;
   const dotsExpected: [number, number] = opts.dpi600
     ? [dotsPrintable[0] * 2, dotsPrintable[1] * 2]
@@ -290,12 +304,17 @@ export function convert(
 /**
  * Convenience wrapper: build a job for a model without constructing the raster
  * builder yourself.
+ *
+ * @param rasterOptions Passed through to {@link BrotherQLRaster}, for example
+ *   `{ strict: true }` to turn commands the model does not support into errors,
+ *   or `{ onWarning }` to redirect the warnings they produce otherwise.
  */
 export function createJob(
   model: string | Model,
   images: readonly RawImage[],
   label: string | Label,
   options: ConvertOptions = {},
+  rasterOptions: RasterOptions = {},
 ): Uint8Array {
-  return convert(new BrotherQLRaster(model), images, label, options);
+  return convert(new BrotherQLRaster(model, rasterOptions), images, label, options);
 }

@@ -154,6 +154,11 @@ def gen_allblack(w: int, h: int) -> bytearray:
     return px
 
 
+def gen_allwhite(w: int, h: int) -> bytearray:
+    """Blank media: every raster row is all zeroes, the best case for PackBits."""
+    return bytearray(b"\xff" * (w * h * 4))
+
+
 def gen_noise(w: int, h: int, seed: int = 1234) -> bytearray:
     """Deterministic LCG noise (Numerical Recipes constants)."""
     px = bytearray(w * h * 4)
@@ -178,6 +183,7 @@ GENERATORS = {
     "rgbsweep": gen_rgbsweep,
     "alphadisc": gen_alpha_disc,
     "allblack": gen_allblack,
+    "allwhite": gen_allwhite,
     "noise": gen_noise,
 }
 
@@ -188,19 +194,37 @@ ALPHA_GENERATORS = {"alphadisc"}
 
 
 class InputSpec:
-    def __init__(self, gen: str, width: int, height: int, **params):
+    """
+    A procedurally generated image.
+
+    ``mode`` is the Pillow mode the image is handed to ``convert()`` in, which is
+    what a caller loading that kind of file would end up with. It defaults to
+    RGBA for generators with meaningful transparency and RGB otherwise, and can
+    be set to ``"L"`` to exercise the greyscale input path.
+
+    The TypeScript side always works from the RGBA bytes, so any case with a
+    non-RGBA mode doubles as a check that the two are equivalent.
+    """
+
+    def __init__(self, gen: str, width: int, height: int, mode: str | None = None, **params):
         self.gen = gen
         self.width = width
         self.height = height
         self.params = params
+        self._mode = mode
 
     @property
     def name(self) -> str:
         suffix = "".join(f"-{k}{v}" for k, v in sorted(self.params.items()))
-        return f"{self.gen}-{self.width}x{self.height}{suffix}"
+        # Only tag the name when the mode is not the generator's natural one, so
+        # that existing fixture names stay stable.
+        mode_tag = f"-{self._mode.lower()}" if self._mode else ""
+        return f"{self.gen}-{self.width}x{self.height}{suffix}{mode_tag}"
 
     @property
     def mode(self) -> str:
+        if self._mode:
+            return self._mode
         return "RGBA" if self.gen in ALPHA_GENERATORS else "RGB"
 
     def rgba(self) -> bytearray:
@@ -208,7 +232,7 @@ class InputSpec:
 
     def image(self) -> Image.Image:
         im = Image.frombytes("RGBA", (self.width, self.height), bytes(self.rgba()))
-        return im if self.mode == "RGBA" else im.convert("RGB")
+        return im if self.mode == "RGBA" else im.convert(self.mode)
 
 
 # --------------------------------------------------------------------------
@@ -306,6 +330,109 @@ CASES = [
          inputs=[InputSpec("checker", 128, 400)], options={}, compare="exact"),
     dict(id="ptp900w-pt24", model="PT-P900W", label="pt24",
          inputs=[InputSpec("checker", 128, 400)], options={}, compare="exact"),
+    dict(id="ptp900w-pt24-compress", model="PT-P900W", label="pt24",
+         inputs=[InputSpec("noise", 128, 200)], options={"compress": True}, compare="exact"),
+
+    # --- feature combinations -------------------------------------------------
+    # Options interact, and each of these reaches code that no single-option
+    # case does.
+    #
+    # PackBits over interleaved two colour rows: compression and the 77 01/77 02
+    # framing have never met before this case.
+    dict(id="ql820nwb-62red-compress", model="QL-820NWB", label="62red",
+         inputs=[InputSpec("rgbsweep", 696, 60)],
+         options={"red": True, "compress": True}, compare="exact"),
+    dict(id="ql810w-62-dither-compress", model="QL-810W", label="62",
+         inputs=[InputSpec("gradient", 696, 80)],
+         options={"dither": True, "compress": True}, compare="exact"),
+    # Dithering is silently ignored on the red path; this pins that down.
+    dict(id="ql810w-62red-dither-ignored", model="QL-810W", label="62red",
+         inputs=[InputSpec("rgbsweep", 696, 60)],
+         options={"red": True, "dither": True}, compare="exact"),
+    dict(id="ql820nwb-62red-nocut-lq", model="QL-820NWB", label="62red",
+         inputs=[InputSpec("rgbsweep", 696, 50)],
+         options={"red": True, "cut": False, "hq": False}, compare="exact"),
+    # All black keeps the 600 dpi halving independent of the resampling filter.
+    dict(id="ql820nwb-62red-600dpi-black", model="QL-820NWB", label="62red",
+         inputs=[InputSpec("allblack", 1392, 80)],
+         options={"red": True, "dpi_600": True}, compare="exact"),
+    dict(id="ql810w-62-600dpi-compress-black", model="QL-810W", label="62",
+         inputs=[InputSpec("allblack", 1392, 100)],
+         options={"dpi_600": True, "compress": True}, compare="exact"),
+    dict(id="ql710w-62-multi-compress", model="QL-710W", label="62",
+         inputs=[InputSpec("noise", 696, 40), InputSpec("stripes", 696, 40),
+                 InputSpec("checker", 696, 40)],
+         options={"compress": True}, compare="exact"),
+    dict(id="ql820nwb-62red-multi", model="QL-820NWB", label="62red",
+         inputs=[InputSpec("rgbsweep", 696, 40), InputSpec("gradient", 696, 40)],
+         options={"red": True}, compare="exact"),
+    dict(id="ql700-62x29-multi-dither", model="QL-700", label="62x29",
+         inputs=[InputSpec("gradient", 696, 271), InputSpec("rgbsweep", 696, 271)],
+         options={"dither": True}, compare="exact"),
+    # Every capability switched off, plus options the model cannot honour.
+    dict(id="ql500-62-nocut-lq", model="QL-500", label="62",
+         inputs=[InputSpec("checker", 696, 60)],
+         options={"cut": False, "hq": False, "compress": True}, compare="exact"),
+
+    # --- rotation ------------------------------------------------------------
+    dict(id="ql700-62-rot0", model="QL-700", label="62",
+         inputs=[InputSpec("checker", 696, 50)], options={"rotate": 0}, compare="exact"),
+    dict(id="ql700-62-rot270", model="QL-700", label="62",
+         inputs=[InputSpec("checker", 50, 696)], options={"rotate": 270}, compare="exact"),
+    dict(id="ql700-62x29-rot180", model="QL-700", label="62x29",
+         inputs=[InputSpec("rgbsweep", 696, 271)], options={"rotate": 180}, compare="exact"),
+    dict(id="ql820nwb-62x29-rot270", model="QL-820NWB", label="62x29",
+         inputs=[InputSpec("checker", 271, 696)], options={"rotate": 270}, compare="exact"),
+
+    # --- threshold and content extremes --------------------------------------
+    dict(id="ql820nwb-62-thresh1", model="QL-820NWB", label="62",
+         inputs=[InputSpec("gradient", 696, 60)], options={"threshold": 1}, compare="exact"),
+    dict(id="ql820nwb-62-thresh99", model="QL-820NWB", label="62",
+         inputs=[InputSpec("gradient", 696, 60)], options={"threshold": 99}, compare="exact"),
+    # Blank media: every row is zero, the best case for PackBits.
+    dict(id="ql700-62-allwhite", model="QL-700", label="62",
+         inputs=[InputSpec("allwhite", 696, 40)], options={}, compare="exact"),
+    dict(id="ql710w-62-allwhite-compress", model="QL-710W", label="62",
+         inputs=[InputSpec("allwhite", 696, 40)], options={"compress": True}, compare="exact"),
+    # A single raster row, the smallest job the printer will accept.
+    dict(id="ql700-62-onerow", model="QL-700", label="62",
+         inputs=[InputSpec("checker", 696, 1)], options={}, compare="exact"),
+    dict(id="ql710w-62-onerow-compress", model="QL-710W", label="62",
+         inputs=[InputSpec("stripes", 696, 1)], options={"compress": True}, compare="exact"),
+
+    # --- greyscale input -----------------------------------------------------
+    # An "L" mode image takes a different route through conversion.py; the
+    # TypeScript side always sees RGBA, so these prove the two agree.
+    dict(id="ql700-62-greyinput", model="QL-700", label="62",
+         inputs=[InputSpec("gradient", 696, 60, mode="L")], options={}, compare="exact"),
+    dict(id="ql820nwb-62red-greyinput", model="QL-820NWB", label="62red",
+         inputs=[InputSpec("gradient", 696, 60, mode="L")],
+         options={"red": True}, compare="exact"),
+
+    # --- the remaining labels ------------------------------------------------
+    # Largest endless right offset (29 dots).
+    dict(id="ql700-12", model="QL-700", label="12",
+         inputs=[InputSpec("checker", 106, 60)], options={}, compare="exact"),
+    dict(id="ql700-17x54", model="QL-700", label="17x54",
+         inputs=[InputSpec("stripes", 165, 566)], options={}, compare="exact"),
+    dict(id="ql700-17x87", model="QL-700", label="17x87",
+         inputs=[InputSpec("checker", 165, 956)], options={}, compare="exact"),
+    dict(id="ql700-23x23", model="QL-700", label="23x23",
+         inputs=[InputSpec("checker", 202, 202)], options={}, compare="exact"),
+    dict(id="ql700-29x42", model="QL-700", label="29x42",
+         inputs=[InputSpec("stripes", 306, 425)], options={}, compare="exact"),
+    # Identifier says 39 mm but the tape is 38 mm, which is what goes on the wire.
+    dict(id="ql700-39x90", model="QL-700", label="39x90",
+         inputs=[InputSpec("checker", 413, 991)], options={}, compare="exact"),
+    dict(id="ql700-39x48", model="QL-700", label="39x48",
+         inputs=[InputSpec("stripes", 425, 495)], options={}, compare="exact"),
+    dict(id="ql700-52x29", model="QL-700", label="52x29",
+         inputs=[InputSpec("checker", 578, 271)], options={}, compare="exact"),
+    # Identifier says 86 mm long, the tape is 87 mm.
+    dict(id="ql700-60x86", model="QL-700", label="60x86",
+         inputs=[InputSpec("stripes", 672, 954)], options={}, compare="exact"),
+    dict(id="ql1100-102", model="QL-1100", label="102",
+         inputs=[InputSpec("checker", 1164, 200)], options={}, compare="exact"),
 ]
 
 PACKBITS_CASES = [

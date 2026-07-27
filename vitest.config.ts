@@ -9,5 +9,13 @@ export default defineConfig({
     environment: 'node',
     include: ['test/**/*.test.ts'],
     testTimeout: 20000,
+    coverage: {
+      provider: 'v8',
+      include: ['src/**'],
+      reporter: ['text', 'html'],
+      // src/browser is canvas work with no faithful stand-in under Node; it is
+      // covered by driving the demo in a real browser instead.
+      exclude: ['src/browser/**'],
+    },
   },
 });
