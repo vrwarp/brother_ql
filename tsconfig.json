@@ -9,6 +9,15 @@
     // `no-restricted-imports` rule scoped to src/ in eslint.config.js.
     "types": ["w3c-web-usb", "node"],
 
+    // The demo imports the library by its package name, as a consumer would.
+    // Resolve that to the source rather than through the package export map,
+    // which would otherwise require dist/ to have been built first and makes
+    // the type check depend on build order. This mirrors the alias in
+    // demo/vite.config.ts, so both see the same files.
+    "paths": {
+      "@vrwarp/brother-ql-webusb": ["./src/index.ts"]
+    },
+
     "strict": true,
     "noUncheckedIndexedAccess": true,
     "noImplicitOverride": true,
