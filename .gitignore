@@ -63,3 +63,4 @@ demo/dist/
 .vitest/
 npm-debug.log*
 .DS_Store
+coverage/
