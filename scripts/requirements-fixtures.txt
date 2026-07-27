@@ -1,0 +1,7 @@
+# Dependencies for regenerating the golden test fixtures from the in-tree
+# Python implementation. Pillow is pinned because the exact output of its
+# grayscale conversion, HSV conversion and Floyd-Steinberg dithering is part of
+# the fixture contract.
+pillow==10.4.0
+packbits==0.6
+attrs>=21.2.0

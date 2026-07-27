@@ -1,239 +1,275 @@
-## brother\_ql
+# brother-ql-webusb
 
-A Python package to control Brother QL label printers.
-It implements the raster language of those printers and allows you to send instruction files to your printer.
-In more details, the following is possible with this package:
+Print to Brother QL and P-touch label printers **directly from a web page**, using
+[WebUSB](https://developer.mozilla.org/en-US/docs/Web/API/WebUSB_API). No driver, no
+print spooler, no native helper application — the browser talks to the printer.
 
-* Create raster language files for the Brother label printers.
-  They can be created from image files or programmatically in your own Python script.
-* Print raster instruction files with your Brother label printer via different backends:
-    * pyusb (works cross-platform)
-    * network (works cross-platform for WiFi/Ethernet-enabled printers)
-    * linux\_kernel (works on Linux only; uses the /dev/usb/lp0 device handles)
+This is a TypeScript port of the [`brother_ql`](./PYTHON.md) Python package, which
+stays in this repository as the reference implementation. Every byte the port emits
+is checked against it: `scripts/generate_fixtures.py` drives the Python code to
+produce complete print jobs, and the test suite replays them and compares byte for
+byte across all 19 printer models and all 27 label types.
 
-The following printers are claimed to be supported (✓ means verified by the author or by contributors):
+> **Status:** the protocol and imaging layers are verified against the Python
+> implementation, and the transport layer is covered by tests against a scripted
+> USB device. Printing has not yet been confirmed against physical hardware — see
+> [Hardware verification](#hardware-verification).
 
-* QL-500 (✓), QL-550 (✓), QL-560 (✓), QL-570 (✓), QL-580N, QL-650TD, QL-700 (✓), QL-710W (✓),
-  QL-720NW (✓), QL-800 (✓), QL-810W (✓), QL-820NWB (✓), QL-1050 (✓), QL-1060N (✓), QL-1100 (✓),
-  QL-1110NWB, and QL-1115NWB.
+## Quick start
 
-The new QL-800 series can print labels with two colors (black and red) on DK-22251 labels.
+```bash
+npm install @vrwarp/brother-ql-webusb
+```
 
-Note: If your printer has an 'Editor Lite' mode, you need to disable it if you want to print via USB.
-Make sure that the corresponding LED is not lit by holding the button down until it turns off.
+```ts
+import { BrotherQLPrinter, enableBrowserImages } from '@vrwarp/brother-ql-webusb';
 
-If you're interested in printing labels using a web interface, check out [brother\_ql\_web][],
-which builds upon this package.
+// The browser only opens its device chooser in response to a user gesture,
+// so this has to run inside a click handler.
+button.addEventListener('click', async () => {
+  const printer = await BrotherQLPrinter.requestDevice({ model: 'QL-820NWB' });
+  enableBrowserImages(printer); // lets it accept canvases, blobs and images
+  await printer.open();
 
-## Why
+  const status = await printer.queryStatus();
+  console.log(`loaded: ${status.mediaWidthMm} mm ${status.mediaType}`);
 
-The special feature of this package is that no printer driver is required for it to work.
-This software bypasses the whole printing system including printer drivers and directly
-talks to your label printer instead.
-This means that even though Brother doesn't offer a driver for the Raspberry Pi (running
-Linux on ARM) you can print nicely using this software.
-And even if there are drivers for your operating system, many programs have difficulties to set
-the page sizes and margins for the labels correctly.
-If you want to print with high precision (which is important for barcodes for example),
-you rather want to have control about every single pixel to be printed.
-This is where brother\_ql comes into the game.
+  await printer.print(myCanvas, { label: '62' });
+  await printer.close();
+});
+```
 
-## Installation
+`print()` resolves once the printer confirms the label came out, and rejects with a
+[typed error](#errors) describing what went wrong otherwise.
 
-brother\_ql is [available on the Python Package Index][PyPI] to be installed with pip:
+## Supported hardware
 
-    pip install --upgrade brother_ql
+All 19 models from the Python package, with their capabilities:
 
-The upgrade flag makes sure, you get the latest version of brother\_ql but also
-of its dependencies.
+| Model | Width | Two colour | Compression | Notes |
+| --- | --- | --- | --- | --- |
+| QL-500 | 720 px | – | – | no cutter, no expanded mode |
+| QL-550, QL-560, QL-570, QL-700 | 720 px | – | – | |
+| QL-580N, QL-650TD, QL-710W, QL-720NW | 720 px | – | yes | |
+| QL-800 | 720 px | **yes** | – | 400 byte reset preamble |
+| QL-810W, QL-820NWB | 720 px | **yes** | yes | 400 byte reset preamble |
+| QL-1050, QL-1060N, QL-1100, QL-1110NWB, QL-1115NWB | 1296 px | – | yes | wide format |
+| PT-P750W | 128 px | – | yes | P-touch, untested on hardware |
+| PT-P900W | 560 px | – | yes | P-touch, untested on hardware |
 
-Alternatively, you can install the latest version from Github using:
+All 27 label types are supported: continuous tape from 12 mm to 103 mm, die-cut
+labels, round die-cut labels, and the black/red DK-22251 tape (`62red`) on the
+QL-800 series.
 
-    pip install --upgrade https://github.com/pklaus/brother_ql/archive/master.zip
+`labelsForModel(model)` returns the ones a given printer can actually use. It
+applies both the label's own model restrictions and a physical fit check, so it
+will not offer 62 mm media for a P-touch whose head is 128 dots across. Asking
+for an impossible combination anyway raises a `RasterError` that names both
+sizes.
 
-This package was mainly created for use with Python 3.
-The essential functionality, however, will also work with Python 2: the creation of label files.
+## Browser and platform support
 
-In order to run the `brother_ql` command line utility, the directory it resides in
-needs to be in the PATH environment variable.
-On some systems, the `pip install` command defaults to the `--user` flag resulting in the utility
-being put in the `~/.local/bin` directory.
-On those systems, extending the path variable via `export PATH="${PATH}:~/.local/bin"` is needed.
+WebUSB is the constraint, and the operating system is usually the obstacle: USB
+printer-class devices *are* claimable by the browser, but a kernel or vendor driver
+often has the device already.
 
-## Usage
+| Browser | Support |
+| --- | --- |
+| Chrome, Edge, Opera (61+) | yes |
+| Chrome for Android | yes |
+| Firefox, Safari | **never** — no WebUSB implementation |
 
-The main user interface of this package is the command line tool `brother_ql`.
+The page must be served over **HTTPS or from localhost**.
 
-    Usage: brother_ql [OPTIONS] COMMAND [ARGS]...
-    
-      Command line interface for the brother_ql Python package.
-    
-    Options:
-      -b, --backend [pyusb|network|linux_kernel]
-      -m, --model [QL-500|QL-550|QL-560|QL-570|QL-580N|QL-650TD|QL-700|QL-710W|QL-720NW|QL-800|QL-810W|QL-820NWB|QL-1050|QL-1060N|QL-1100|QL-1110NWB|QL-1115NWB]
-      -p, --printer PRINTER_IDENTIFIER
-                                      The identifier for the printer. This could
-                                      be a string like tcp://192.168.1.21:9100 for
-                                      a networked printer or
-                                      usb://0x04f9:0x2015/000M6Z401370 for a
-                                      printer connected via USB.
-      --debug
-      --version                       Show the version and exit.
-      --help                          Show this message and exit.
-    
-    Commands:
-      analyze   interpret a binary file containing raster...
-      discover  find connected label printers
-      info      list available labels, models etc.
-      print     Print a label
-      send      send an instruction file to the printer
+| Platform | What is needed |
+| --- | --- |
+| macOS | Nothing, as long as no CUPS job holds the printer |
+| Android, ChromeOS | Nothing |
+| Linux | A udev rule, plus detaching `usblp` (see below) |
+| Windows | Replacing `usbprint.sys` with WinUSB (see below) |
 
-There are some global options available such as --model and --printer.
-They can also be provided by environment variables (`BROTHER_QL_MODEL` and `BROTHER_QL_PRINTER`).
+**Editor Lite mode, all platforms.** If the printer's Editor Lite LED is on it
+enumerates as a USB drive, and mass storage is a class browsers refuse to hand over.
+Hold the button until the LED goes out. The library detects this and raises
+`EditorLiteModeError` rather than a generic failure.
 
-The global options are followed by a command such as `info` or `print`.
-The most important command is the `print` command and here is its CLI signature:
+**Linux.** Enable `chrome://flags/#automatic-usb-detach` (Chromium will then detach
+`usblp`, which is on its allowlist), or unload the module with
+`sudo modprobe -r usblp`. Then grant access:
 
-    Usage: brother_ql print [OPTIONS] IMAGE [IMAGE] ...
-    
-      Print a label of the provided IMAGE.
-    
-    Options:
-      -l, --label [12|29|38|50|54|62|102|103|17x54|17x87|23x23|29x42|29x90|39x90|39x48|52x29|62x29|62x100|102x51|102x152|103x164|d12|d24|d58]
-                                      The label (size, type - die-cut or endless).
-                                      Run `brother_ql info labels` for a full
-                                      list including ideal pixel dimensions.
-      -r, --rotate [auto|0|90|180|270]
-                                      Rotate the image (counterclock-wise) by this
-                                      amount of degrees.
-      -t, --threshold FLOAT           The threshold value (in percent) to
-                                      discriminate between black and white pixels.
-      -d, --dither                    Enable dithering when converting the image
-                                      to b/w. If set, --threshold is meaningless.
-      -c, --compress                  Enable compression (if available with the
-                                      model). Label creation can take slightly
-                                      longer but the resulting instruction size is
-                                      normally considerably smaller.
-      --red                           Create a label to be printed on
-                                      black/red/white tape (only with QL-8xx
-                                      series on DK-22251 labels). You must use
-                                      this option when printing on black/red tape,
-                                      even when not printing red.
-      --600dpi                        Print with 600x300 dpi available on some
-                                      models. Provide your image as 600x600 dpi;
-                                      perpendicular to the feeding the image will
-                                      be resized to 300dpi.
-      --lq                            Print with low quality (faster). Default is
-                                      high quality.
-      --no-cut                        Don't cut the tape after printing the label.
-      --help                          Show this message and exit.
+```
+# /etc/udev/rules.d/99-brother-ql.rules
+SUBSYSTEM=="usb", ATTRS{idVendor}=="04f9", MODE="0660", TAG+="uaccess"
+```
 
-So, printing an image file onto 62mm endless tape on a QL-710W label printer can be as easy as:
+Chromium from Snap additionally needs `sudo snap connect chromium:raw-usb`.
 
-    export BROTHER_QL_PRINTER=tcp://192.168.1.21
-    export BROTHER_QL_MODEL=QL-710W
-    brother_ql print -l 62 my_image.png
+**Windows.** `usbprint.sys` claims label printers exclusively, so the browser cannot
+open them until that driver is replaced with WinUSB — for example with
+[Zadig](https://zadig.akeo.ie/). **This stops other applications from printing to
+the device** until the original driver is restored in Device Manager. Weigh that up
+before committing to it.
 
-The available label names can be listed with `brother_ql info labels`:
+## API
 
-     Name      Printable px   Description
-     12         106           12mm endless
-     29         306           29mm endless
-     38         413           38mm endless
-     50         554           50mm endless
-     54         590           54mm endless
-     62         696           62mm endless
-     102       1164           102mm endless
-     103       1200           103mm endless
-     17x54      165 x  566    17mm x 54mm die-cut
-     17x87      165 x  956    17mm x 87mm die-cut
-     23x23      202 x  202    23mm x 23mm die-cut
-     29x42      306 x  425    29mm x 42mm die-cut
-     29x90      306 x  991    29mm x 90mm die-cut
-     39x90      413 x  991    38mm x 90mm die-cut
-     39x48      425 x  495    39mm x 48mm die-cut
-     52x29      578 x  271    52mm x 29mm die-cut
-     62x29      696 x  271    62mm x 29mm die-cut
-     62x100     696 x 1109    62mm x 100mm die-cut
-     102x51    1164 x  526    102mm x 51mm die-cut
-     102x152   1164 x 1660    102mm x 153mm die-cut
-     103x164   1200 x 1822    103mm x 164mm die-cut
-     d12         94 x   94    12mm round die-cut
-     d24        236 x  236    24mm round die-cut
-     d58        618 x  618    58mm round die-cut
+### Printing
 
-**Pro Tip™**:
-For the best results, use image files with the matching pixel dimensions.
-Die-cut labels have to be in the exact pixel dimensions stated above.
-For endless label rolls, you can provide image files with a pixel width as stated above.
-If you provide a file with different dimensions when creating an endless label file,
-it will be scaled to fit the width.
+```ts
+const printer = await BrotherQLPrinter.requestDevice({ model: 'QL-820NWB' });
+const printers = await BrotherQLPrinter.getPairedDevices(); // no gesture needed
 
-### Backends
+await printer.open();
+await printer.print(source, {
+  label: '62',        // required
+  copies: 2,
+  dither: true,       // error diffusion instead of a hard threshold
+  threshold: 70,      // percent, when not dithering
+  red: false,         // black/red on DK-22251, QL-800 series only
+  rotate: 'auto',     // 'auto' | 0 | 90 | 180 | 270, counter-clockwise
+  cut: true,
+  hq: true,
+  compress: false,
+  dpi600: false,
+}, (progress) => console.log(progress.phase, progress.bytesSent));
+await printer.close();
+```
 
-There are multiple backends for connecting to the printer available (✔: supported, ✘: not supported):
+`source` may be a `RawImage`, `ImageData`, `HTMLCanvasElement`, `OffscreenCanvas`,
+`ImageBitmap`, `HTMLImageElement` or a `Blob`/`File`. Everything except `RawImage`
+needs `enableBrowserImages(printer)` first, which keeps the core usable outside a
+browser.
 
-Backend | Kind | Linux | Mac OS | Windows
--------|-------|---------|---------|--------
-network (1) | TCP | ✔ | ✔ | ✔
-linux\_kernel | USB | ✔ (2) | ✘ | ✘
-pyusb (3) | USB | ✔ (3.1) | ✔ (3.2) | ✔ (3.3)
+Events: `printer.on('status', …)` fires for every packet the printer sends, during
+a job as well as outside one; `printer.on('disconnect', …)` fires when it goes away.
 
-Notes:
+### Detecting the loaded media
 
-1. The network backend doesn't support reading back the printer state, currently.
-   Failure such as *wrong label type* or *end of label roll reached* won't be detected by this software.
-2. The label printer should show up automatically as `/dev/usb/lp0` when connected.
-   Please check the ownership (user, group) of this file to be able to print as a regular user.
-   Consider setting up a udev .rules file.
-3. PyUSB is a Python wrapper allowing to implement USB communication in userspace.
-   1. On Linux: install libusb1 as offered by your distribution: `sudo apt-get install libusb-1.0-0` (Ubuntu, Debian), `sudo zyppe in libusb-1_0-0` (OpenSUSE), `sudo pacman -S libusb` (Arch).
-   2. On Mac OS: Install [Homebrew](https://brew.sh/) and then install libusb1 using: `brew install libusb`.
-   3. On Windows: download [libusb-win32-devel-filter-1.2.6.0.exe](https://sourceforge.net/projects/libusb-win32/files/libusb-win32-releases/1.2.6.0/)
-      from sourceforge and install it.
-      After installing, you have to use the "Filter Wizard" to setup a "device filter" for the label printer.
+```ts
+const status = await printer.queryStatus();
+const candidates = suggestLabels(status, printer.model);
+```
 
-### Legacy command line tools
+`suggestLabels` maps the reported media back onto the label table. Continuous tape
+is matched on width, die-cut media on width and length. It can return more than one
+label — 62 mm tape matches both `62` and `62red`, because the printer cannot report
+whether the tape is the black/red kind.
 
-For a long time, this project provided multiple command line tools, such as
-`brother_ql_create`, `brother_ql_print`, `brother_ql_analyze`, and more.
-The overview of those tools can still be found in the [LEGACY][] documentation.
-The use of these tools is now considered deprecated and they will be
-removed in a future release.
+### Building jobs without a printer
 
-## Author
+```ts
+import { createJob, prepareImage } from '@vrwarp/brother-ql-webusb';
 
-This software package was written by Philipp Klaus based on Brother's documentation
-of its raster language and based on additinal reverse engineering efforts.
+const bytes = createJob('QL-820NWB', [image], '62', { dither: true });
+```
 
-* Philipp Klaus  
-  <philipp.l.klaus@web.de>
+`createJob` (and the lower level `convert`/`BrotherQLRaster`) never touch USB, so
+they run under Node too — useful for generating jobs on a server and sending them
+over the network, or for tests. `prepareImage` stops one step earlier and returns
+the bit planes, which is what the demo uses to draw its preview: what you see is
+produced by the same code that feeds the printer.
 
-Many more have contributed by raising issues, helping to solve them,
-improving the code and helping out financially.
+`analyzeInstructions(bytes)` and `summarizeJob(bytes)` split a job back into
+individual commands, which is handy when comparing against a capture.
 
-## Contributing
+### Errors
 
-There are many ways to support the development of brother\_ql:
+Every error carries a stable `code`:
 
-* **File an issue** on Github, if you encounter problems, have a proposal, etc.
-* **Send an email with ideas** to the author.
-* **Submit a pull request** on Github if you improved the code and know how to use git.
-* **Finance a label printer** from the [author's wishlist][] to allow him to extend the device coverage and testing.
-* **Donate** an arbitrary amount of money for the development of brother\_ql [via Paypal][donation].
+| Code | Meaning |
+| --- | --- |
+| `not-supported` | No WebUSB, or the page is not a secure context |
+| `selection-cancelled` | The user dismissed the device chooser |
+| `editor-lite` | The printer is in Editor Lite mode |
+| `claim-failed` | A driver holds the device; carries a `platformHint` |
+| `disconnected` | The printer went away |
+| `printer-error` | The printer reported an error; carries decoded `errors` |
+| `status-timeout` | The printer went quiet; carries `pagesPrinted` |
+| `transfer-timeout` | A write never completed; the connection was closed |
+| `raster` | The image does not fit; carries `expected`/`actual` sizes |
+| `unsupported-command` | The model cannot do what was asked |
+| `unknown-model`, `unknown-label` | Bad identifier |
+| `busy` | Another operation is in progress |
+| `malformed-status` | An unparseable status packet |
 
-Thanks to everyone helping to improve brother\_ql.
+## Fidelity
 
-## Links
+The port is checked against the Python implementation byte for byte. That includes
+the parts that are easy to get subtly wrong: alpha compositing, the greyscale
+transform, Floyd–Steinberg dithering and the HSV conversion behind the red/black
+separation are ports of Pillow's own C routines, verified against captured
+intermediate planes rather than eyeballed.
 
-* The source code and issue tracker of this package is to be found on **Github**: [pklaus/brother\_ql][].
-* The package is also to be found on the Python Package Index **PyPI**: [brother\_ql][PyPI].
-* A curated list of related and unrelated software can be found [in this document][related-unrelated].
+Two deliberate differences:
 
-[author's wishlist]: https://www.amazon.de/registry/wishlist/3GSVLPF08AFIR
-[donation]: https://www.paypal.com/cgi-bin/webscr?cmd=_donations&business=philipp.klaus@gmail.com&lc=US&item_name=Donation+to+brother_ql+Development&no_note=0&cn=&currency_code=USD&bn=PP-DonationsBF:btn_donateCC_LG.gif:NonHosted
-[brother\_ql\_web]: https://github.com/pklaus/brother_ql_web
-[LEGACY]: https://github.com/pklaus/brother_ql/blob/master/LEGACY.md
-[pklaus/brother\_ql]: https://github.com/pklaus/brother_ql
-[PyPI]: https://pypi.python.org/pypi/brother_ql
-[related-unrelated]: https://gist.github.com/pklaus/aeb55e18d36690df6a84a3eab49e9fd7
+- **Resizing.** Pillow resamples with a Lanczos filter. A canvas cannot reproduce
+  that, so images are scaled with the browser's own high quality filter. Supply an
+  image at the label's exact pixel width to avoid resampling altogether.
+- **600 dpi.** Halving the width uses an exact 2:1 average rather than Pillow's
+  bicubic filter, which is both deterministic and closer to what the operation
+  means.
+
+Neither affects the command stream, only the pixels inside it.
+
+Three behaviours were changed on purpose, because the Python versions are bugs:
+
+- Jobs are written in chunks rather than one enormous transfer, which also gives
+  progress reporting and lets an error abort a job early.
+- The completion timeout is an *idle* timeout that starts after the last byte is
+  written and resets on every packet, so a long label cannot exhaust a budget that
+  also had to cover transmission.
+- Completions are counted per page, so a multi-page job waits for every page rather
+  than resolving after the first.
+
+## Development
+
+```bash
+npm install
+npm test            # ~1000 tests, including the byte-for-byte golden comparison
+npm run test:coverage
+npm run typecheck
+npm run demo:dev    # the demo at http://localhost:5173 (localhost is a secure context)
+```
+
+Coverage sits near 100% of statements for everything except `src/browser`, which
+is canvas work with no faithful stand-in under Node; that is covered by driving
+the demo in a real browser.
+
+Regenerating the golden fixtures needs Python and the pinned Pillow:
+
+```bash
+pip install "setuptools<60" wheel
+pip install --no-build-isolation -r scripts/requirements-fixtures.txt
+npm run fixtures         # rewrite test/fixtures/
+npm run fixtures:check   # verify the committed ones, as CI does
+```
+
+Input images are generated procedurally on both sides rather than committed, and
+the manifest records a SHA-256 of each so a drift in the generators is reported
+directly instead of surfacing as a mysterious protocol mismatch.
+
+## Hardware verification
+
+The protocol is verified against the reference implementation, but printing end to
+end has not yet been confirmed on a physical printer. If you have one, the demo is
+the fastest way to try it. Worth exercising:
+
+- [ ] Pairing and opening on your platform
+- [ ] Editor Lite on → clear error; off → works
+- [ ] `queryStatus` reports the loaded media, and `suggestLabels` picks it
+- [ ] Continuous tape: threshold and dithered
+- [ ] Die-cut: an exactly sized image, and a transposed one (auto-rotation)
+- [ ] Black/red on DK-22251 (QL-800 series)
+- [ ] Multiple copies, and per-page progress
+- [ ] Errors: wrong label loaded, cover opened mid-print, end of tape
+- [ ] Unplugging mid-job, then reconnecting without reloading the page
+
+## Relationship to the Python package
+
+The Python package is unchanged and still works; see [PYTHON.md](./PYTHON.md). It is
+the reference for the wire protocol and the source of the golden fixtures, so the
+two implementations cannot drift apart silently.
+
+## License
+
+GPL-3.0-or-later, inherited from the upstream Python package by Philipp Klaus and
+contributors.

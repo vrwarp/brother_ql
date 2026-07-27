@@ -1,0 +1,363 @@
+[
+  {
+    "identifier": "QL-500",
+    "minMaxLengthDots": [
+      295,
+      11811
+    ],
+    "minMaxFeed": [
+      35,
+      1500
+    ],
+    "numberBytesPerRow": 90,
+    "additionalOffsetR": 0,
+    "modeSetting": false,
+    "cutting": false,
+    "expandedMode": false,
+    "compression": false,
+    "twoColor": false,
+    "numInvalidateBytes": 200
+  },
+  {
+    "identifier": "QL-550",
+    "minMaxLengthDots": [
+      295,
+      11811
+    ],
+    "minMaxFeed": [
+      35,
+      1500
+    ],
+    "numberBytesPerRow": 90,
+    "additionalOffsetR": 0,
+    "modeSetting": false,
+    "cutting": true,
+    "expandedMode": true,
+    "compression": false,
+    "twoColor": false,
+    "numInvalidateBytes": 200
+  },
+  {
+    "identifier": "QL-560",
+    "minMaxLengthDots": [
+      295,
+      11811
+    ],
+    "minMaxFeed": [
+      35,
+      1500
+    ],
+    "numberBytesPerRow": 90,
+    "additionalOffsetR": 0,
+    "modeSetting": false,
+    "cutting": true,
+    "expandedMode": true,
+    "compression": false,
+    "twoColor": false,
+    "numInvalidateBytes": 200
+  },
+  {
+    "identifier": "QL-570",
+    "minMaxLengthDots": [
+      150,
+      11811
+    ],
+    "minMaxFeed": [
+      35,
+      1500
+    ],
+    "numberBytesPerRow": 90,
+    "additionalOffsetR": 0,
+    "modeSetting": false,
+    "cutting": true,
+    "expandedMode": true,
+    "compression": false,
+    "twoColor": false,
+    "numInvalidateBytes": 200
+  },
+  {
+    "identifier": "QL-580N",
+    "minMaxLengthDots": [
+      150,
+      11811
+    ],
+    "minMaxFeed": [
+      35,
+      1500
+    ],
+    "numberBytesPerRow": 90,
+    "additionalOffsetR": 0,
+    "modeSetting": true,
+    "cutting": true,
+    "expandedMode": true,
+    "compression": true,
+    "twoColor": false,
+    "numInvalidateBytes": 200
+  },
+  {
+    "identifier": "QL-650TD",
+    "minMaxLengthDots": [
+      295,
+      11811
+    ],
+    "minMaxFeed": [
+      35,
+      1500
+    ],
+    "numberBytesPerRow": 90,
+    "additionalOffsetR": 0,
+    "modeSetting": true,
+    "cutting": true,
+    "expandedMode": true,
+    "compression": true,
+    "twoColor": false,
+    "numInvalidateBytes": 200
+  },
+  {
+    "identifier": "QL-700",
+    "minMaxLengthDots": [
+      150,
+      11811
+    ],
+    "minMaxFeed": [
+      35,
+      1500
+    ],
+    "numberBytesPerRow": 90,
+    "additionalOffsetR": 0,
+    "modeSetting": false,
+    "cutting": true,
+    "expandedMode": true,
+    "compression": false,
+    "twoColor": false,
+    "numInvalidateBytes": 200
+  },
+  {
+    "identifier": "QL-710W",
+    "minMaxLengthDots": [
+      150,
+      11811
+    ],
+    "minMaxFeed": [
+      35,
+      1500
+    ],
+    "numberBytesPerRow": 90,
+    "additionalOffsetR": 0,
+    "modeSetting": true,
+    "cutting": true,
+    "expandedMode": true,
+    "compression": true,
+    "twoColor": false,
+    "numInvalidateBytes": 200
+  },
+  {
+    "identifier": "QL-720NW",
+    "minMaxLengthDots": [
+      150,
+      11811
+    ],
+    "minMaxFeed": [
+      35,
+      1500
+    ],
+    "numberBytesPerRow": 90,
+    "additionalOffsetR": 0,
+    "modeSetting": true,
+    "cutting": true,
+    "expandedMode": true,
+    "compression": true,
+    "twoColor": false,
+    "numInvalidateBytes": 200
+  },
+  {
+    "identifier": "QL-800",
+    "minMaxLengthDots": [
+      150,
+      11811
+    ],
+    "minMaxFeed": [
+      35,
+      1500
+    ],
+    "numberBytesPerRow": 90,
+    "additionalOffsetR": 0,
+    "modeSetting": true,
+    "cutting": true,
+    "expandedMode": true,
+    "compression": false,
+    "twoColor": true,
+    "numInvalidateBytes": 400
+  },
+  {
+    "identifier": "QL-810W",
+    "minMaxLengthDots": [
+      150,
+      11811
+    ],
+    "minMaxFeed": [
+      35,
+      1500
+    ],
+    "numberBytesPerRow": 90,
+    "additionalOffsetR": 0,
+    "modeSetting": true,
+    "cutting": true,
+    "expandedMode": true,
+    "compression": true,
+    "twoColor": true,
+    "numInvalidateBytes": 400
+  },
+  {
+    "identifier": "QL-820NWB",
+    "minMaxLengthDots": [
+      150,
+      11811
+    ],
+    "minMaxFeed": [
+      35,
+      1500
+    ],
+    "numberBytesPerRow": 90,
+    "additionalOffsetR": 0,
+    "modeSetting": true,
+    "cutting": true,
+    "expandedMode": true,
+    "compression": true,
+    "twoColor": true,
+    "numInvalidateBytes": 400
+  },
+  {
+    "identifier": "QL-1050",
+    "minMaxLengthDots": [
+      295,
+      35433
+    ],
+    "minMaxFeed": [
+      35,
+      1500
+    ],
+    "numberBytesPerRow": 162,
+    "additionalOffsetR": 44,
+    "modeSetting": true,
+    "cutting": true,
+    "expandedMode": true,
+    "compression": true,
+    "twoColor": false,
+    "numInvalidateBytes": 200
+  },
+  {
+    "identifier": "QL-1060N",
+    "minMaxLengthDots": [
+      295,
+      35433
+    ],
+    "minMaxFeed": [
+      35,
+      1500
+    ],
+    "numberBytesPerRow": 162,
+    "additionalOffsetR": 44,
+    "modeSetting": true,
+    "cutting": true,
+    "expandedMode": true,
+    "compression": true,
+    "twoColor": false,
+    "numInvalidateBytes": 200
+  },
+  {
+    "identifier": "QL-1100",
+    "minMaxLengthDots": [
+      301,
+      35434
+    ],
+    "minMaxFeed": [
+      35,
+      1500
+    ],
+    "numberBytesPerRow": 162,
+    "additionalOffsetR": 44,
+    "modeSetting": true,
+    "cutting": true,
+    "expandedMode": true,
+    "compression": true,
+    "twoColor": false,
+    "numInvalidateBytes": 200
+  },
+  {
+    "identifier": "QL-1110NWB",
+    "minMaxLengthDots": [
+      301,
+      35434
+    ],
+    "minMaxFeed": [
+      35,
+      1500
+    ],
+    "numberBytesPerRow": 162,
+    "additionalOffsetR": 44,
+    "modeSetting": true,
+    "cutting": true,
+    "expandedMode": true,
+    "compression": true,
+    "twoColor": false,
+    "numInvalidateBytes": 200
+  },
+  {
+    "identifier": "QL-1115NWB",
+    "minMaxLengthDots": [
+      301,
+      35434
+    ],
+    "minMaxFeed": [
+      35,
+      1500
+    ],
+    "numberBytesPerRow": 162,
+    "additionalOffsetR": 44,
+    "modeSetting": true,
+    "cutting": true,
+    "expandedMode": true,
+    "compression": true,
+    "twoColor": false,
+    "numInvalidateBytes": 200
+  },
+  {
+    "identifier": "PT-P750W",
+    "minMaxLengthDots": [
+      31,
+      14172
+    ],
+    "minMaxFeed": [
+      35,
+      1500
+    ],
+    "numberBytesPerRow": 16,
+    "additionalOffsetR": 0,
+    "modeSetting": true,
+    "cutting": true,
+    "expandedMode": true,
+    "compression": true,
+    "twoColor": false,
+    "numInvalidateBytes": 200
+  },
+  {
+    "identifier": "PT-P900W",
+    "minMaxLengthDots": [
+      57,
+      28346
+    ],
+    "minMaxFeed": [
+      35,
+      1500
+    ],
+    "numberBytesPerRow": 70,
+    "additionalOffsetR": 0,
+    "modeSetting": true,
+    "cutting": true,
+    "expandedMode": true,
+    "compression": true,
+    "twoColor": false,
+    "numInvalidateBytes": 200
+  }
+]

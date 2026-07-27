@@ -55,3 +55,12 @@ docs/_build/
 
 # PyBuilder
 target/
+
+# Node / TypeScript (WebUSB library)
+node_modules/
+demo/dist/
+*.tsbuildinfo
+.vitest/
+npm-debug.log*
+.DS_Store
+coverage/

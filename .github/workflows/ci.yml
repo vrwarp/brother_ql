@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  check:
+    name: Typecheck, lint, test, build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm test
+      - run: npm run build
+      - run: npm run demo:build
+
+  fixtures:
+    name: Golden fixture drift
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      # The committed fixtures under test/fixtures/ are produced by the in-tree
+      # Python implementation. If this job fails, either regenerate them with
+      # `npm run fixtures` and commit the result, or a change to brother_ql/
+      # altered the wire protocol.
+      # The `packbits` sdist has no wheel and its setup.py does not build under
+      # modern setuptools, so it is installed without build isolation against a
+      # legacy setuptools.
+      - name: Install fixture dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install "setuptools<60" wheel
+          pip install --no-build-isolation -r scripts/requirements-fixtures.txt
+
+      - name: Check fixtures are up to date
+        run: python scripts/generate_fixtures.py --check

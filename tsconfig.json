@@ -1,0 +1,39 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    // `node` is needed by the test helpers, which read fixtures off disk. The
+    // shipped library must not use Node built-ins; that is enforced by the
+    // `no-restricted-imports` rule scoped to src/ in eslint.config.js.
+    "types": ["w3c-web-usb", "node"],
+
+    // The demo imports the library by its package name, as a consumer would.
+    // Resolve that to the source rather than through the package export map,
+    // which would otherwise require dist/ to have been built first and makes
+    // the type check depend on build order. This mirrors the alias in
+    // demo/vite.config.ts, so both see the same files.
+    "paths": {
+      "@vrwarp/brother-ql-webusb": ["./src/index.ts"]
+    },
+
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "exactOptionalPropertyTypes": false,
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true,
+
+    "declaration": true,
+    "emitDeclarationOnly": true,
+    "outDir": "dist",
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true
+  },
+  "include": ["src/**/*.ts", "test/**/*.ts", "demo/**/*.ts", "*.config.ts"],
+  "exclude": ["node_modules", "dist", "demo/dist"]
+}
