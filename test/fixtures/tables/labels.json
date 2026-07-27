@@ -1,0 +1,596 @@
+[
+  {
+    "identifier": "12",
+    "tapeSize": [
+      12,
+      0
+    ],
+    "formFactor": 2,
+    "dotsTotal": [
+      142,
+      0
+    ],
+    "dotsPrintable": [
+      106,
+      0
+    ],
+    "offsetR": 29,
+    "feedMargin": 35,
+    "restrictedToModels": [],
+    "color": 0,
+    "name": "12mm endless"
+  },
+  {
+    "identifier": "29",
+    "tapeSize": [
+      29,
+      0
+    ],
+    "formFactor": 2,
+    "dotsTotal": [
+      342,
+      0
+    ],
+    "dotsPrintable": [
+      306,
+      0
+    ],
+    "offsetR": 6,
+    "feedMargin": 35,
+    "restrictedToModels": [],
+    "color": 0,
+    "name": "29mm endless"
+  },
+  {
+    "identifier": "38",
+    "tapeSize": [
+      38,
+      0
+    ],
+    "formFactor": 2,
+    "dotsTotal": [
+      449,
+      0
+    ],
+    "dotsPrintable": [
+      413,
+      0
+    ],
+    "offsetR": 12,
+    "feedMargin": 35,
+    "restrictedToModels": [],
+    "color": 0,
+    "name": "38mm endless"
+  },
+  {
+    "identifier": "50",
+    "tapeSize": [
+      50,
+      0
+    ],
+    "formFactor": 2,
+    "dotsTotal": [
+      590,
+      0
+    ],
+    "dotsPrintable": [
+      554,
+      0
+    ],
+    "offsetR": 12,
+    "feedMargin": 35,
+    "restrictedToModels": [],
+    "color": 0,
+    "name": "50mm endless"
+  },
+  {
+    "identifier": "54",
+    "tapeSize": [
+      54,
+      0
+    ],
+    "formFactor": 2,
+    "dotsTotal": [
+      636,
+      0
+    ],
+    "dotsPrintable": [
+      590,
+      0
+    ],
+    "offsetR": 0,
+    "feedMargin": 35,
+    "restrictedToModels": [],
+    "color": 0,
+    "name": "54mm endless"
+  },
+  {
+    "identifier": "62",
+    "tapeSize": [
+      62,
+      0
+    ],
+    "formFactor": 2,
+    "dotsTotal": [
+      732,
+      0
+    ],
+    "dotsPrintable": [
+      696,
+      0
+    ],
+    "offsetR": 12,
+    "feedMargin": 35,
+    "restrictedToModels": [],
+    "color": 0,
+    "name": "62mm endless"
+  },
+  {
+    "identifier": "62red",
+    "tapeSize": [
+      62,
+      0
+    ],
+    "formFactor": 2,
+    "dotsTotal": [
+      732,
+      0
+    ],
+    "dotsPrintable": [
+      696,
+      0
+    ],
+    "offsetR": 12,
+    "feedMargin": 35,
+    "restrictedToModels": [],
+    "color": 1,
+    "name": "62mm endless (black/red/white)"
+  },
+  {
+    "identifier": "102",
+    "tapeSize": [
+      102,
+      0
+    ],
+    "formFactor": 2,
+    "dotsTotal": [
+      1200,
+      0
+    ],
+    "dotsPrintable": [
+      1164,
+      0
+    ],
+    "offsetR": 12,
+    "feedMargin": 35,
+    "restrictedToModels": [
+      "QL-1050",
+      "QL-1060N",
+      "QL-1100",
+      "QL-1110NWB",
+      "QL-1115NWB"
+    ],
+    "color": 0,
+    "name": "102mm endless"
+  },
+  {
+    "identifier": "103",
+    "tapeSize": [
+      104,
+      0
+    ],
+    "formFactor": 2,
+    "dotsTotal": [
+      1224,
+      0
+    ],
+    "dotsPrintable": [
+      1200,
+      0
+    ],
+    "offsetR": 12,
+    "feedMargin": 35,
+    "restrictedToModels": [
+      "QL-1050",
+      "QL-1060N",
+      "QL-1100",
+      "QL-1110NWB",
+      "QL-1115NWB"
+    ],
+    "color": 0,
+    "name": "104mm endless"
+  },
+  {
+    "identifier": "17x54",
+    "tapeSize": [
+      17,
+      54
+    ],
+    "formFactor": 1,
+    "dotsTotal": [
+      201,
+      636
+    ],
+    "dotsPrintable": [
+      165,
+      566
+    ],
+    "offsetR": 0,
+    "feedMargin": 0,
+    "restrictedToModels": [],
+    "color": 0,
+    "name": "17mm x 54mm die-cut"
+  },
+  {
+    "identifier": "17x87",
+    "tapeSize": [
+      17,
+      87
+    ],
+    "formFactor": 1,
+    "dotsTotal": [
+      201,
+      1026
+    ],
+    "dotsPrintable": [
+      165,
+      956
+    ],
+    "offsetR": 0,
+    "feedMargin": 0,
+    "restrictedToModels": [],
+    "color": 0,
+    "name": "17mm x 87mm die-cut"
+  },
+  {
+    "identifier": "23x23",
+    "tapeSize": [
+      23,
+      23
+    ],
+    "formFactor": 1,
+    "dotsTotal": [
+      272,
+      272
+    ],
+    "dotsPrintable": [
+      202,
+      202
+    ],
+    "offsetR": 42,
+    "feedMargin": 0,
+    "restrictedToModels": [],
+    "color": 0,
+    "name": "23mm x 23mm die-cut"
+  },
+  {
+    "identifier": "29x42",
+    "tapeSize": [
+      29,
+      42
+    ],
+    "formFactor": 1,
+    "dotsTotal": [
+      342,
+      495
+    ],
+    "dotsPrintable": [
+      306,
+      425
+    ],
+    "offsetR": 6,
+    "feedMargin": 0,
+    "restrictedToModels": [],
+    "color": 0,
+    "name": "29mm x 42mm die-cut"
+  },
+  {
+    "identifier": "29x90",
+    "tapeSize": [
+      29,
+      90
+    ],
+    "formFactor": 1,
+    "dotsTotal": [
+      342,
+      1061
+    ],
+    "dotsPrintable": [
+      306,
+      991
+    ],
+    "offsetR": 6,
+    "feedMargin": 0,
+    "restrictedToModels": [],
+    "color": 0,
+    "name": "29mm x 90mm die-cut"
+  },
+  {
+    "identifier": "39x90",
+    "tapeSize": [
+      38,
+      90
+    ],
+    "formFactor": 1,
+    "dotsTotal": [
+      449,
+      1061
+    ],
+    "dotsPrintable": [
+      413,
+      991
+    ],
+    "offsetR": 12,
+    "feedMargin": 0,
+    "restrictedToModels": [],
+    "color": 0,
+    "name": "38mm x 90mm die-cut"
+  },
+  {
+    "identifier": "39x48",
+    "tapeSize": [
+      39,
+      48
+    ],
+    "formFactor": 1,
+    "dotsTotal": [
+      461,
+      565
+    ],
+    "dotsPrintable": [
+      425,
+      495
+    ],
+    "offsetR": 6,
+    "feedMargin": 0,
+    "restrictedToModels": [],
+    "color": 0,
+    "name": "39mm x 48mm die-cut"
+  },
+  {
+    "identifier": "52x29",
+    "tapeSize": [
+      52,
+      29
+    ],
+    "formFactor": 1,
+    "dotsTotal": [
+      614,
+      341
+    ],
+    "dotsPrintable": [
+      578,
+      271
+    ],
+    "offsetR": 0,
+    "feedMargin": 0,
+    "restrictedToModels": [],
+    "color": 0,
+    "name": "52mm x 29mm die-cut"
+  },
+  {
+    "identifier": "60x86",
+    "tapeSize": [
+      60,
+      87
+    ],
+    "formFactor": 1,
+    "dotsTotal": [
+      708,
+      1024
+    ],
+    "dotsPrintable": [
+      672,
+      954
+    ],
+    "offsetR": 18,
+    "feedMargin": 0,
+    "restrictedToModels": [],
+    "color": 0,
+    "name": "60mm x 87mm die-cut"
+  },
+  {
+    "identifier": "62x29",
+    "tapeSize": [
+      62,
+      29
+    ],
+    "formFactor": 1,
+    "dotsTotal": [
+      732,
+      341
+    ],
+    "dotsPrintable": [
+      696,
+      271
+    ],
+    "offsetR": 12,
+    "feedMargin": 0,
+    "restrictedToModels": [],
+    "color": 0,
+    "name": "62mm x 29mm die-cut"
+  },
+  {
+    "identifier": "62x100",
+    "tapeSize": [
+      62,
+      100
+    ],
+    "formFactor": 1,
+    "dotsTotal": [
+      732,
+      1179
+    ],
+    "dotsPrintable": [
+      696,
+      1109
+    ],
+    "offsetR": 12,
+    "feedMargin": 0,
+    "restrictedToModels": [],
+    "color": 0,
+    "name": "62mm x 100mm die-cut"
+  },
+  {
+    "identifier": "102x51",
+    "tapeSize": [
+      102,
+      51
+    ],
+    "formFactor": 1,
+    "dotsTotal": [
+      1200,
+      596
+    ],
+    "dotsPrintable": [
+      1164,
+      526
+    ],
+    "offsetR": 12,
+    "feedMargin": 0,
+    "restrictedToModels": [
+      "QL-1050",
+      "QL-1060N",
+      "QL-1100",
+      "QL-1110NWB",
+      "QL-1115NWB"
+    ],
+    "color": 0,
+    "name": "102mm x 51mm die-cut"
+  },
+  {
+    "identifier": "102x152",
+    "tapeSize": [
+      102,
+      153
+    ],
+    "formFactor": 1,
+    "dotsTotal": [
+      1200,
+      1804
+    ],
+    "dotsPrintable": [
+      1164,
+      1660
+    ],
+    "offsetR": 12,
+    "feedMargin": 0,
+    "restrictedToModels": [
+      "QL-1050",
+      "QL-1060N",
+      "QL-1100",
+      "QL-1110NWB",
+      "QL-1115NWB"
+    ],
+    "color": 0,
+    "name": "102mm x 153mm die-cut"
+  },
+  {
+    "identifier": "103x164",
+    "tapeSize": [
+      104,
+      164
+    ],
+    "formFactor": 1,
+    "dotsTotal": [
+      1224,
+      1941
+    ],
+    "dotsPrintable": [
+      1200,
+      1822
+    ],
+    "offsetR": 12,
+    "feedMargin": 0,
+    "restrictedToModels": [
+      "QL-1100",
+      "QL-1110NWB"
+    ],
+    "color": 0,
+    "name": "104mm x 164mm die-cut"
+  },
+  {
+    "identifier": "d12",
+    "tapeSize": [
+      12,
+      12
+    ],
+    "formFactor": 3,
+    "dotsTotal": [
+      142,
+      142
+    ],
+    "dotsPrintable": [
+      94,
+      94
+    ],
+    "offsetR": 113,
+    "feedMargin": 35,
+    "restrictedToModels": [],
+    "color": 0,
+    "name": "12mm round die-cut"
+  },
+  {
+    "identifier": "d24",
+    "tapeSize": [
+      24,
+      24
+    ],
+    "formFactor": 3,
+    "dotsTotal": [
+      284,
+      284
+    ],
+    "dotsPrintable": [
+      236,
+      236
+    ],
+    "offsetR": 42,
+    "feedMargin": 0,
+    "restrictedToModels": [],
+    "color": 0,
+    "name": "24mm round die-cut"
+  },
+  {
+    "identifier": "d58",
+    "tapeSize": [
+      58,
+      58
+    ],
+    "formFactor": 3,
+    "dotsTotal": [
+      688,
+      688
+    ],
+    "dotsPrintable": [
+      618,
+      618
+    ],
+    "offsetR": 51,
+    "feedMargin": 0,
+    "restrictedToModels": [],
+    "color": 0,
+    "name": "58mm round die-cut"
+  },
+  {
+    "identifier": "pt24",
+    "tapeSize": [
+      24,
+      0
+    ],
+    "formFactor": 4,
+    "dotsTotal": [
+      128,
+      0
+    ],
+    "dotsPrintable": [
+      128,
+      0
+    ],
+    "offsetR": 0,
+    "feedMargin": 14,
+    "restrictedToModels": [],
+    "color": 0,
+    "name": "24mm endless"
+  }
+]

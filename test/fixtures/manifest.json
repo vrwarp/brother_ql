@@ -1,0 +1,853 @@
+{
+  "generatedBy": "scripts/generate_fixtures.py",
+  "pillowVersion": "10.4.0",
+  "inputs": {
+    "noise-200x120": {
+      "gen": "noise",
+      "width": 200,
+      "height": 120,
+      "params": {},
+      "mode": "RGB",
+      "sha256": "81bba9ceb2a9d572724367ebb3f4d961ef07f522713f02a974027b46bb351cfc"
+    },
+    "gradient-200x120": {
+      "gen": "gradient",
+      "width": 200,
+      "height": 120,
+      "params": {},
+      "mode": "RGB",
+      "sha256": "c632e8ad7e53b602f6bd4834b597c41402d840cbde83d8f134a7ac974c1c055f"
+    },
+    "rgbsweep-200x120": {
+      "gen": "rgbsweep",
+      "width": 200,
+      "height": 120,
+      "params": {},
+      "mode": "RGB",
+      "sha256": "a2b9d7e7a461a160382cbb7b6c9a61856d5d6ee13a835f56f27e1fcfa315941e"
+    },
+    "alphadisc-200x120": {
+      "gen": "alphadisc",
+      "width": 200,
+      "height": 120,
+      "params": {},
+      "mode": "RGBA",
+      "sha256": "8f5706d747788f1747f8deb50c161ab708e8c83fd493f3a8df4bab1ca48e75a8"
+    },
+    "checker-696x300": {
+      "gen": "checker",
+      "width": 696,
+      "height": 300,
+      "params": {},
+      "mode": "RGB",
+      "sha256": "57dc7fbe5ce0214a19cce47325c965d3685de4a4835722a6a33e50f302fca183"
+    },
+    "stripes-306x200": {
+      "gen": "stripes",
+      "width": 306,
+      "height": 200,
+      "params": {},
+      "mode": "RGB",
+      "sha256": "97684fd8a93cd6023a529cfce29eea15148a8d61d4a7e6a9d6762f8d7d2c9fd5"
+    },
+    "checker-94x94": {
+      "gen": "checker",
+      "width": 94,
+      "height": 94,
+      "params": {},
+      "mode": "RGB",
+      "sha256": "32cfec7507e139fa710cdaca0608a1969135d0e0eb6d17e9c0c15a3cd9628ed8"
+    },
+    "checker-696x200": {
+      "gen": "checker",
+      "width": 696,
+      "height": 200,
+      "params": {},
+      "mode": "RGB",
+      "sha256": "1785c01e3905712534936f7ce0730387934268f0b595c0394e41d8739611f025"
+    },
+    "noise-413x160": {
+      "gen": "noise",
+      "width": 413,
+      "height": 160,
+      "params": {},
+      "mode": "RGB",
+      "sha256": "267d875a6c6d414498c527499d865d4060c574eee4b6225059516858aa0dd133"
+    },
+    "stripes-590x200": {
+      "gen": "stripes",
+      "width": 590,
+      "height": 200,
+      "params": {},
+      "mode": "RGB",
+      "sha256": "7062891f8a899a395d1dbdcdb2675355f4af965e99af8eda6bea2a5279fa0ccf"
+    },
+    "checker-306x991": {
+      "gen": "checker",
+      "width": 306,
+      "height": 991,
+      "params": {},
+      "mode": "RGB",
+      "sha256": "1a4b57fb5bdde74f83b18fa49f7d9eea788679a8c100bc399b0fa40d6c7a7c56"
+    },
+    "checker-991x306": {
+      "gen": "checker",
+      "width": 991,
+      "height": 306,
+      "params": {},
+      "mode": "RGB",
+      "sha256": "d27e911350ce591dc5327efc747d27f266a5b90c62b3a9913a763b57f14fe78f"
+    },
+    "checker-696x1109": {
+      "gen": "checker",
+      "width": 696,
+      "height": 1109,
+      "params": {},
+      "mode": "RGB",
+      "sha256": "6df009b39c5e5969327288aef0d90a56bb39d8b211999c5e138658abbf2f3ceb"
+    },
+    "stripes-696x1109": {
+      "gen": "stripes",
+      "width": 696,
+      "height": 1109,
+      "params": {},
+      "mode": "RGB",
+      "sha256": "a776a845aa2c23bc5ec6fcfc754ec81d2072db0e164d2135df32881566bf186b"
+    },
+    "gradient-696x1109": {
+      "gen": "gradient",
+      "width": 696,
+      "height": 1109,
+      "params": {},
+      "mode": "RGB",
+      "sha256": "b6c15416f79914a094fa44d62b44ba20a9e289198d955a253da810f0381c10be"
+    },
+    "checker-696x271": {
+      "gen": "checker",
+      "width": 696,
+      "height": 271,
+      "params": {},
+      "mode": "RGB",
+      "sha256": "97a09d39e63954d8fdd62b6cfa8d30749e3f16acfdce70adf58eaaada68908a4"
+    },
+    "gradient-554x240": {
+      "gen": "gradient",
+      "width": 554,
+      "height": 240,
+      "params": {},
+      "mode": "RGB",
+      "sha256": "aeff96212fbaa0c2086a34fb5929500aada928b0d0c69d18849a8898271226f3"
+    },
+    "gradient-696x300": {
+      "gen": "gradient",
+      "width": 696,
+      "height": 300,
+      "params": {},
+      "mode": "RGB",
+      "sha256": "e31b436803bd0d74c8edd231636cb53fc6fb8a2b5ffa4aa73a08b187b553b661"
+    },
+    "checker-696x120": {
+      "gen": "checker",
+      "width": 696,
+      "height": 120,
+      "params": {},
+      "mode": "RGB",
+      "sha256": "aa8a5ce4f4044728f8a6c63691199322dfe71d42cddd30bb61bdd815ace92fdb"
+    },
+    "rgbsweep-696x300": {
+      "gen": "rgbsweep",
+      "width": 696,
+      "height": 300,
+      "params": {},
+      "mode": "RGB",
+      "sha256": "ed24b8ed457411ff387816b14d41c569f9ddea90c9ef97d074fffff37f4e5fd6"
+    },
+    "allblack-1392x600": {
+      "gen": "allblack",
+      "width": 1392,
+      "height": 600,
+      "params": {},
+      "mode": "RGB",
+      "sha256": "dea0dad0721361b6b18dbd5d827734cefb0e04b1e9bac055490e168b733792f7"
+    },
+    "stripes-1392x542": {
+      "gen": "stripes",
+      "width": 1392,
+      "height": 542,
+      "params": {},
+      "mode": "RGB",
+      "sha256": "72a560a393c3494d5fa44060e9cebee40b8eb9d8cc1f137b56147afd7eb67ce4"
+    },
+    "alphadisc-696x300": {
+      "gen": "alphadisc",
+      "width": 696,
+      "height": 300,
+      "params": {},
+      "mode": "RGBA",
+      "sha256": "042da1174673a4727775d59c0e7f80679ab3db06bab324c2b3e565d37344a287"
+    },
+    "gradient-696x271": {
+      "gen": "gradient",
+      "width": 696,
+      "height": 271,
+      "params": {},
+      "mode": "RGB",
+      "sha256": "bc6c253e1a56ca0d0f8fc0bdfb256518f4943ba99600e77233aaee2bbc2f60f6"
+    },
+    "checker-236x236": {
+      "gen": "checker",
+      "width": 236,
+      "height": 236,
+      "params": {},
+      "mode": "RGB",
+      "sha256": "a5c535d3974594b725c74aa41f1d693da2690ab4c509de8dc97c4cf4d83dd1ab"
+    },
+    "checker-300x696": {
+      "gen": "checker",
+      "width": 300,
+      "height": 696,
+      "params": {},
+      "mode": "RGB",
+      "sha256": "9a0c57c170d57d9be8a4f5e7000519b5a043d290875acecbbe645680bd429e8d"
+    },
+    "rgbsweep-618x618": {
+      "gen": "rgbsweep",
+      "width": 618,
+      "height": 618,
+      "params": {},
+      "mode": "RGB",
+      "sha256": "f07d54d3d293f628a8b12c8ba4d1c3fa1a48e94dc38a0540fdca5c34ca835661"
+    },
+    "checker-1164x526": {
+      "gen": "checker",
+      "width": 1164,
+      "height": 526,
+      "params": {},
+      "mode": "RGB",
+      "sha256": "b99a8bca2e1be4ee85d6c2469746b00ef23e3f83efb80113d8998935c54a73e6"
+    },
+    "checker-696x240": {
+      "gen": "checker",
+      "width": 696,
+      "height": 240,
+      "params": {},
+      "mode": "RGB",
+      "sha256": "eed192aac9584f9363e90d6adc737a8b497131e009d6152ecd7570814af7718b"
+    },
+    "stripes-1200x1822": {
+      "gen": "stripes",
+      "width": 1200,
+      "height": 1822,
+      "params": {},
+      "mode": "RGB",
+      "sha256": "dc32258f1125754918096707172cbb4b2e8b0e3f27c7b259ac5816933198e381"
+    },
+    "checker-1164x1660": {
+      "gen": "checker",
+      "width": 1164,
+      "height": 1660,
+      "params": {},
+      "mode": "RGB",
+      "sha256": "b3900a8be5a90140c5f0d776546bc3c2b47b07454bdf1cdb3e252a3926cfe9c8"
+    },
+    "stripes-1200x400": {
+      "gen": "stripes",
+      "width": 1200,
+      "height": 400,
+      "params": {},
+      "mode": "RGB",
+      "sha256": "833148771788e09ade05d1fa98d9eb1daf943b77a0a98333449070fa5b27ebfa"
+    },
+    "checker-128x400": {
+      "gen": "checker",
+      "width": 128,
+      "height": 400,
+      "params": {},
+      "mode": "RGB",
+      "sha256": "a3042b8a99b88aaef0f5ccee3edaa99d8cbb2f630d1d43422191b92fb2bb045d"
+    }
+  },
+  "planes": [
+    {
+      "id": "grey-noise",
+      "input": "noise-200x120",
+      "kind": "grey",
+      "file": "planes/grey-noise.bin.gz",
+      "width": 200,
+      "height": 120,
+      "sha256": "f7029d9b5ce80d1005142db9db110b0fc8fca53955242011e78724edee3d720d"
+    },
+    {
+      "id": "invgrey-noise",
+      "input": "noise-200x120",
+      "kind": "invgrey",
+      "file": "planes/invgrey-noise.bin.gz",
+      "width": 200,
+      "height": 120,
+      "sha256": "8805892cbde805ee592fe248a3e9c050f84faf7fa004c156fb6329f5dc9f339a"
+    },
+    {
+      "id": "threshold70-gradient",
+      "input": "gradient-200x120",
+      "kind": "bilevel",
+      "file": "planes/threshold70-gradient.bin.gz",
+      "width": 200,
+      "height": 120,
+      "sha256": "6b781d8e0ee0ec5875ebdbc84517e92d763ddaa4bf980a92a8a1cdf110e4b01c"
+    },
+    {
+      "id": "dither-gradient",
+      "input": "gradient-200x120",
+      "kind": "bilevel",
+      "file": "planes/dither-gradient.bin.gz",
+      "width": 200,
+      "height": 120,
+      "sha256": "4d9bbc483eb30353c98b55637e51d4e4cd307ec2eedc83549dda24fef746daf1"
+    },
+    {
+      "id": "dither-noise",
+      "input": "noise-200x120",
+      "kind": "bilevel",
+      "file": "planes/dither-noise.bin.gz",
+      "width": 200,
+      "height": 120,
+      "sha256": "56754f4a90db19962a51729f7a5738be45e9fd30159aed366dd7bd7a0a5901ec"
+    },
+    {
+      "id": "hsv-h-rgbsweep",
+      "input": "rgbsweep-200x120",
+      "kind": "hsv-h",
+      "file": "planes/hsv-h-rgbsweep.bin.gz",
+      "width": 200,
+      "height": 120,
+      "sha256": "ada020a6da8db1c307f6d3a27e9241b86fab6913eb609ac9746cdfa1148568ea"
+    },
+    {
+      "id": "hsv-s-rgbsweep",
+      "input": "rgbsweep-200x120",
+      "kind": "hsv-s",
+      "file": "planes/hsv-s-rgbsweep.bin.gz",
+      "width": 200,
+      "height": 120,
+      "sha256": "8da49b30daa1c19bbef6e130f5e7966d6e2d24948d8a7f32c96784be4e4e3499"
+    },
+    {
+      "id": "hsv-v-rgbsweep",
+      "input": "rgbsweep-200x120",
+      "kind": "hsv-v",
+      "file": "planes/hsv-v-rgbsweep.bin.gz",
+      "width": 200,
+      "height": 120,
+      "sha256": "15ace7633e7521296feedc6df49d8ee88d6dd3a23261255a50f10f3b04d66f2d"
+    },
+    {
+      "id": "composite-alphadisc",
+      "input": "alphadisc-200x120",
+      "kind": "rgb",
+      "file": "planes/composite-alphadisc.bin.gz",
+      "width": 200,
+      "height": 120,
+      "sha256": "b5964ca4e036989d4d882359a22ebf519146c6804f80fc05131eafa7b55337b7"
+    },
+    {
+      "id": "grey-alphadisc",
+      "input": "alphadisc-200x120",
+      "kind": "grey",
+      "file": "planes/grey-alphadisc.bin.gz",
+      "width": 200,
+      "height": 120,
+      "sha256": "beaf5f5c38f3dee240ad25c979081f099cbd27dc97352cd6c29a9e4d2ffe6927"
+    },
+    {
+      "id": "red-rgbsweep",
+      "input": "rgbsweep-200x120",
+      "kind": "bilevel",
+      "file": "planes/red-rgbsweep.bin.gz",
+      "width": 200,
+      "height": 120,
+      "sha256": "88a39e343b30212fdde97c74c4ffae127ad9b8e06e00adbccd10d9fff36d4e9c"
+    },
+    {
+      "id": "black-rgbsweep",
+      "input": "rgbsweep-200x120",
+      "kind": "bilevel",
+      "file": "planes/black-rgbsweep.bin.gz",
+      "width": 200,
+      "height": 120,
+      "sha256": "4defb0187ffd5a69bd9eb6e47b48cdc80924184116621a2dc19a507866aff7ad"
+    }
+  ],
+  "packbits": [
+    {
+      "raw": "",
+      "encoded": ""
+    },
+    {
+      "raw": "00",
+      "encoded": "0000"
+    },
+    {
+      "raw": "ff",
+      "encoded": "00ff"
+    },
+    {
+      "raw": "0102030405",
+      "encoded": "040102030405"
+    },
+    {
+      "raw": "aaaaaa",
+      "encoded": "feaa"
+    },
+    {
+      "raw": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "encoded": "82aa"
+    },
+    {
+      "raw": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "encoded": "81aa"
+    },
+    {
+      "raw": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "encoded": "82aaffaa"
+    },
+    {
+      "raw": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "encoded": "82aa82aad3aa"
+    },
+    {
+      "raw": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f",
+      "encoded": "7f000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f"
+    },
+    {
+      "raw": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7",
+      "encoded": "7e000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e487f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7"
+    },
+    {
+      "raw": "010102020303",
+      "encoded": "ff01ff02ff03"
+    },
+    {
+      "raw": "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+      "encoded": "a700"
+    },
+    {
+      "raw": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "encoded": "82ffdeff"
+    },
+    {
+      "raw": "00000000000000000000000000000000000000000000000000000000000000000000000000000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff00ff00ff00ff00ff00ff",
+      "encoded": "d900d9ff0900ff00ff00ff00ff00ff"
+    }
+  ],
+  "cases": [
+    {
+      "id": "ql500-62",
+      "model": "QL-500",
+      "label": "62",
+      "inputs": [
+        "checker-696x300"
+      ],
+      "options": {},
+      "compare": "exact",
+      "file": "expected/ql500-62.bin.gz",
+      "bytes": 28124,
+      "sha256": "416ed4ab6e9185d3e1cf9690fbb1c58e6e45db7d43915f4d2fae113f7534d22c"
+    },
+    {
+      "id": "ql550-29",
+      "model": "QL-550",
+      "label": "29",
+      "inputs": [
+        "stripes-306x200"
+      ],
+      "options": {},
+      "compare": "exact",
+      "file": "expected/ql550-29.bin.gz",
+      "bytes": 18836,
+      "sha256": "dd086d5ee1db7275cf8e88ef5dc93b4840da75a805b653872a8b2c7aea295946"
+    },
+    {
+      "id": "ql560-d12",
+      "model": "QL-560",
+      "label": "d12",
+      "inputs": [
+        "checker-94x94"
+      ],
+      "options": {},
+      "compare": "exact",
+      "file": "expected/ql560-d12.bin.gz",
+      "bytes": 8978,
+      "sha256": "edf979697f409506bbd546ddeaf57d7889235e6200bf8919840a0ca251492382"
+    },
+    {
+      "id": "ql570-62-nocut",
+      "model": "QL-570",
+      "label": "62",
+      "inputs": [
+        "checker-696x200"
+      ],
+      "options": {
+        "cut": false
+      },
+      "compare": "exact",
+      "file": "expected/ql570-62-nocut.bin.gz",
+      "bytes": 18828,
+      "sha256": "d95b972df537fb42c5f720c1e59daed76658f2786bc1033a1475ba194a8c5925"
+    },
+    {
+      "id": "ql580n-38-compress",
+      "model": "QL-580N",
+      "label": "38",
+      "inputs": [
+        "noise-413x160"
+      ],
+      "options": {
+        "compress": true
+      },
+      "compare": "exact",
+      "file": "expected/ql580n-38-compress.bin.gz",
+      "bytes": 9912,
+      "sha256": "9fb234bf96b085c4aada4e77d41dcd24b1ed990d6b994be9dfe1a237fee62479"
+    },
+    {
+      "id": "ql650td-54",
+      "model": "QL-650TD",
+      "label": "54",
+      "inputs": [
+        "stripes-590x200"
+      ],
+      "options": {},
+      "compare": "exact",
+      "file": "expected/ql650td-54.bin.gz",
+      "bytes": 18844,
+      "sha256": "2117225633871493390fe2015ff2ecca8e4118ab90549be479e824dd2c88a914"
+    },
+    {
+      "id": "ql700-29x90",
+      "model": "QL-700",
+      "label": "29x90",
+      "inputs": [
+        "checker-306x991"
+      ],
+      "options": {},
+      "compare": "exact",
+      "file": "expected/ql700-29x90.bin.gz",
+      "bytes": 92399,
+      "sha256": "9891398d32d80d03066b2e4202692d0dc2d4606b7a34fcb359eef3e0d0e1e015"
+    },
+    {
+      "id": "ql700-29x90-autorot",
+      "model": "QL-700",
+      "label": "29x90",
+      "inputs": [
+        "checker-991x306"
+      ],
+      "options": {
+        "rotate": "auto"
+      },
+      "compare": "exact",
+      "file": "expected/ql700-29x90-autorot.bin.gz",
+      "bytes": 92399,
+      "sha256": "137bc58b024b5596a2e2f54f2582deb38df2a1fc2822b6b9a93d36c943308b9a"
+    },
+    {
+      "id": "ql700-62x100-multi",
+      "model": "QL-700",
+      "label": "62x100",
+      "inputs": [
+        "checker-696x1109",
+        "stripes-696x1109",
+        "gradient-696x1109"
+      ],
+      "options": {},
+      "compare": "exact",
+      "file": "expected/ql700-62x100-multi.bin.gz",
+      "bytes": 309715,
+      "sha256": "0e3467faa3379a3ad6342debfbd1dda804a924d0d0bc4507cf79484f571ae314"
+    },
+    {
+      "id": "ql710w-62x29-compress",
+      "model": "QL-710W",
+      "label": "62x29",
+      "inputs": [
+        "checker-696x271"
+      ],
+      "options": {
+        "compress": true
+      },
+      "compare": "exact",
+      "file": "expected/ql710w-62x29-compress.bin.gz",
+      "bytes": 25720,
+      "sha256": "a21326b034ac999f4546d2b028b90ec739d72c4e2fa1d8a658a272ef9f075959"
+    },
+    {
+      "id": "ql720nw-50-thresh30",
+      "model": "QL-720NW",
+      "label": "50",
+      "inputs": [
+        "gradient-554x240"
+      ],
+      "options": {
+        "threshold": 30
+      },
+      "compare": "exact",
+      "file": "expected/ql720nw-50-thresh30.bin.gz",
+      "bytes": 22564,
+      "sha256": "bd57ebc6c7b89a8ff9841dc22b06187085f9e4eed449e63be46e4c056cd843c1"
+    },
+    {
+      "id": "ql800-62-thresh90",
+      "model": "QL-800",
+      "label": "62",
+      "inputs": [
+        "gradient-696x300"
+      ],
+      "options": {
+        "threshold": 90
+      },
+      "compare": "exact",
+      "file": "expected/ql800-62-thresh90.bin.gz",
+      "bytes": 28344,
+      "sha256": "f2e6c6b9b0bc176ca1895cb5648d93d1e00dfcfc70a2c2117cdf067db1670678"
+    },
+    {
+      "id": "ql800-62-compressreq",
+      "model": "QL-800",
+      "label": "62",
+      "inputs": [
+        "checker-696x120"
+      ],
+      "options": {
+        "compress": true
+      },
+      "compare": "exact",
+      "file": "expected/ql800-62-compressreq.bin.gz",
+      "bytes": 11604,
+      "sha256": "770a7aed745cf70017426b22f9248a754060c23bb73a84f74717442eb51d2fed"
+    },
+    {
+      "id": "ql800-62red-red",
+      "model": "QL-800",
+      "label": "62red",
+      "inputs": [
+        "rgbsweep-696x300"
+      ],
+      "options": {
+        "red": true
+      },
+      "compare": "exact",
+      "file": "expected/ql800-62red-red.bin.gz",
+      "bytes": 56244,
+      "sha256": "38a3c4bfc0974524f3adc7f8cfcbcee0717d016564dcb5097945eb7ffdf968c7"
+    },
+    {
+      "id": "ql810w-62-lq",
+      "model": "QL-810W",
+      "label": "62",
+      "inputs": [
+        "checker-696x200"
+      ],
+      "options": {
+        "hq": false
+      },
+      "compare": "exact",
+      "file": "expected/ql810w-62-lq.bin.gz",
+      "bytes": 19044,
+      "sha256": "e39679e42d7f174c900b6120cb99504f1beab0a453eda30bc92cb8510276c926"
+    },
+    {
+      "id": "ql810w-62-600dpi-black",
+      "model": "QL-810W",
+      "label": "62",
+      "inputs": [
+        "allblack-1392x600"
+      ],
+      "options": {
+        "dpi_600": true
+      },
+      "compare": "exact",
+      "file": "expected/ql810w-62-600dpi-black.bin.gz",
+      "bytes": 56244,
+      "sha256": "57151fc8bc2f46cc752acf5711a0d74ea01dcbfce41f61cf3e5524db85f15cca"
+    },
+    {
+      "id": "ql810w-62x29-600dpi",
+      "model": "QL-810W",
+      "label": "62x29",
+      "inputs": [
+        "stripes-1392x542"
+      ],
+      "options": {
+        "dpi_600": true
+      },
+      "compare": "framing",
+      "file": "expected/ql810w-62x29-600dpi.bin.gz",
+      "bytes": 50850,
+      "sha256": "44baf7a5453ec3cf160229233f4b6f77063d04992aeb997ea38da6b2aa548385"
+    },
+    {
+      "id": "ql810w-62red-alpha",
+      "model": "QL-810W",
+      "label": "62red",
+      "inputs": [
+        "alphadisc-696x300"
+      ],
+      "options": {
+        "red": true
+      },
+      "compare": "exact",
+      "file": "expected/ql810w-62red-alpha.bin.gz",
+      "bytes": 56244,
+      "sha256": "61c40f19fffd1e0f0d7de21b1d45ea8717fa5cca1942423a794c8916fbe3f1cb"
+    },
+    {
+      "id": "ql820nwb-62x29-dither",
+      "model": "QL-820NWB",
+      "label": "62x29",
+      "inputs": [
+        "gradient-696x271"
+      ],
+      "options": {
+        "dither": true
+      },
+      "compare": "exact",
+      "file": "expected/ql820nwb-62x29-dither.bin.gz",
+      "bytes": 25647,
+      "sha256": "25f91fcd4b80875385a21dfa35a5c47da008714fc87d541c7fce94e8bc52c5f3"
+    },
+    {
+      "id": "ql820nwb-d24",
+      "model": "QL-820NWB",
+      "label": "d24",
+      "inputs": [
+        "checker-236x236"
+      ],
+      "options": {},
+      "compare": "exact",
+      "file": "expected/ql820nwb-d24.bin.gz",
+      "bytes": 22392,
+      "sha256": "26a31f6a5cddfb8b58175c8b4c8fd6b42c59bd36bfba8be54b8d40078fa1a7dc"
+    },
+    {
+      "id": "ql820nwb-62-rot90",
+      "model": "QL-820NWB",
+      "label": "62",
+      "inputs": [
+        "checker-300x696"
+      ],
+      "options": {
+        "rotate": 90
+      },
+      "compare": "exact",
+      "file": "expected/ql820nwb-62-rot90.bin.gz",
+      "bytes": 28344,
+      "sha256": "bef5328c7a8e067ad4b143c440fe495a8626ba4294c6719dd4dfb37cfa7e04eb"
+    },
+    {
+      "id": "ql820nwb-d58-rot180",
+      "model": "QL-820NWB",
+      "label": "d58",
+      "inputs": [
+        "rgbsweep-618x618"
+      ],
+      "options": {
+        "rotate": 180
+      },
+      "compare": "exact",
+      "file": "expected/ql820nwb-d58-rot180.bin.gz",
+      "bytes": 57918,
+      "sha256": "24327908fa2e6639a26104f3583fdbeff8239c6ee5c4c49bcb4a98a0a066c8e4"
+    },
+    {
+      "id": "ql1050-102x51",
+      "model": "QL-1050",
+      "label": "102x51",
+      "inputs": [
+        "checker-1164x526"
+      ],
+      "options": {},
+      "compare": "exact",
+      "file": "expected/ql1050-102x51.bin.gz",
+      "bytes": 87034,
+      "sha256": "96eb19f38b0f77a950c17d3573afcd46c3fcea5f928d3038108a58b7de73a8af"
+    },
+    {
+      "id": "ql1060n-62",
+      "model": "QL-1060N",
+      "label": "62",
+      "inputs": [
+        "checker-696x240"
+      ],
+      "options": {},
+      "compare": "exact",
+      "file": "expected/ql1060n-62.bin.gz",
+      "bytes": 39844,
+      "sha256": "ea12c98b3e89844fd362d9458c5ef7e75b663fe90718f2e7d1c865f755369eb6"
+    },
+    {
+      "id": "ql1100-103x164",
+      "model": "QL-1100",
+      "label": "103x164",
+      "inputs": [
+        "stripes-1200x1822"
+      ],
+      "options": {},
+      "compare": "exact",
+      "file": "expected/ql1100-103x164.bin.gz",
+      "bytes": 300874,
+      "sha256": "647111eb84a94d2eab9b8cc11cf878ad84344ddd3220fb66b420acecc85164f4"
+    },
+    {
+      "id": "ql1110nwb-102x152",
+      "model": "QL-1110NWB",
+      "label": "102x152",
+      "inputs": [
+        "checker-1164x1660"
+      ],
+      "options": {},
+      "compare": "exact",
+      "file": "expected/ql1110nwb-102x152.bin.gz",
+      "bytes": 274144,
+      "sha256": "e904a82112682b3d10cbda90100c6594c83b5f410d8312a6724b24dd8c7f1696"
+    },
+    {
+      "id": "ql1115nwb-103",
+      "model": "QL-1115NWB",
+      "label": "103",
+      "inputs": [
+        "stripes-1200x400"
+      ],
+      "options": {},
+      "compare": "exact",
+      "file": "expected/ql1115nwb-103.bin.gz",
+      "bytes": 66244,
+      "sha256": "acaa0e280d9cfce89166e779f4be09a24e1d5007c33d72b934c7323c2edff4b7"
+    },
+    {
+      "id": "ptp750w-pt24",
+      "model": "PT-P750W",
+      "label": "pt24",
+      "inputs": [
+        "checker-128x400"
+      ],
+      "options": {},
+      "compare": "exact",
+      "file": "expected/ptp750w-pt24.bin.gz",
+      "bytes": 7844,
+      "sha256": "53d7f18601cd8e65610a04b2eaec61cba851e9aaf90db835f8a9b141824a832e"
+    },
+    {
+      "id": "ptp900w-pt24",
+      "model": "PT-P900W",
+      "label": "pt24",
+      "inputs": [
+        "checker-128x400"
+      ],
+      "options": {},
+      "compare": "exact",
+      "file": "expected/ptp900w-pt24.bin.gz",
+      "bytes": 29444,
+      "sha256": "8f6c088950ff478797686d0471e495784b5346d7900ba8a16ad31bcf5c9c72f2"
+    }
+  ]
+}
