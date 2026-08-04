@@ -284,6 +284,39 @@ Input images are generated procedurally on both sides rather than committed, and
 the manifest records a SHA-256 of each so a drift in the generators is reported
 directly instead of surfacing as a mysterious protocol mismatch.
 
+## Releasing
+
+A release is a version bump. Open a pull request that raises `version` in
+`package.json` and moves the `[Unreleased]` heading in `CHANGELOG.md` down to
+`## [x.y.z] - YYYY-MM-DD`; when it merges,
+[`.github/workflows/publish.yml`](.github/workflows/publish.yml) runs the test
+suite, publishes to npm with provenance, tags `vx.y.z` and opens a GitHub release
+with that changelog section as its notes.
+
+Every push to `master` runs the workflow, and it does nothing when the version in
+`package.json` is already on npm — so merging anything else is not a release and
+does not need to be treated as one.
+
+Two things need setting up once, before the first release:
+
+- **An `NPM_TOKEN` repository secret.** An npm
+  [granular access token](https://docs.npmjs.com/about-access-tokens) with write
+  access to the `@vrwarp` scope. A classic automation token also works. It must
+  not require a one-time password, since nobody is there to type one.
+- **Branch protection on `master`** requiring CI's *Typecheck, lint, test, build*
+  and *Golden fixture drift* checks. The publish workflow re-runs the first of
+  those itself, but protection is what stops an unreviewed commit reaching
+  `master` — and therefore npm — at all.
+
+To rehearse without shipping anything, run the workflow manually from the Actions
+tab with **dry run** ticked. It does every check and prints the tarball contents,
+and stops before the publish.
+
+The first release cannot use npm's
+[trusted publishing](https://docs.npmjs.com/trusted-publishers), because a
+trusted publisher is configured against a package that already exists. Once
+`0.1.0` is out, switching to it removes the need for the token entirely.
+
 ## Hardware verification
 
 The protocol is verified against the reference implementation, but printing end to
