@@ -171,6 +171,43 @@ produced by the same code that feeds the printer.
 `analyzeInstructions(bytes)` and `summarizeJob(bytes)` split a job back into
 individual commands, which is handy when comparing against a capture.
 
+### Rasterising in a Web Worker
+
+The imaging pipeline is synchronous and takes tens of milliseconds on a label of
+any size, which is long enough to drop frames in a UI that is doing anything
+else. It is also entirely DOM-free and works on plain `Uint8Array`s, so it moves
+into a worker cleanly. What cannot move is the transport: `navigator.usb` is not
+exposed to workers.
+
+Import the two halves separately so neither side carries the other's weight:
+
+```ts
+// worker.ts — the expensive part, off the main thread
+import { createJob } from '@vrwarp/brother-ql-webusb/convert';
+
+self.onmessage = ({ data }) => {
+  const bytes = createJob(data.model, [data.image], data.label, { copies: data.copies });
+  self.postMessage(bytes, [bytes.buffer]); // transfer, don't copy
+};
+```
+
+```ts
+// main.ts — the device, which has to live here
+import { BrotherQLPrinterCore } from '@vrwarp/brother-ql-webusb/printer-core';
+
+const [printer] = await BrotherQLPrinterCore.getPairedDevices({ model: 'QL-810W' });
+await printer.open();
+await printer.sendRaw(bytesFromWorker, { pageCount: copies });
+```
+
+`BrotherQLPrinterCore` is what `BrotherQLPrinter` is built on: same pairing,
+claiming, chunked transmission, status handling and completion handshake, minus
+`print()`. Render at the exact `expectedImageSize(label)` dot size and the
+normaliser has nothing to resample.
+
+`./labels` and `./models` are exported the same way, for a media or model picker
+that has no reason to pull in either half.
+
 ### Errors
 
 Every error carries a stable `code`:

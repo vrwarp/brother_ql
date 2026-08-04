@@ -29,6 +29,22 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
     },
+    "./printer-core": {
+      "types": "./dist/printer-core.d.ts",
+      "import": "./dist/printer-core.js"
+    },
+    "./convert": {
+      "types": "./dist/convert.d.ts",
+      "import": "./dist/convert.js"
+    },
+    "./labels": {
+      "types": "./dist/labels.d.ts",
+      "import": "./dist/labels.js"
+    },
+    "./models": {
+      "types": "./dist/models.d.ts",
+      "import": "./dist/models.js"
+    },
     "./package.json": "./package.json"
   },
   "types": "./dist/index.d.ts",

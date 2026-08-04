@@ -33,6 +33,10 @@
 // --- high level -----------------------------------------------------------
 export {
   BrotherQLPrinter,
+  // Re-exported through printer.js, which is where a reader looking for "the
+  // printer" will land. `@vrwarp/brother-ql-webusb/printer-core` is the import
+  // to use when the imaging pipeline's weight is not wanted.
+  BrotherQLPrinterCore,
   type ImageNormalizer,
   type PrinterEvents,
   type PrinterOptions,
@@ -40,6 +44,7 @@ export {
   type PrintProgress,
   type PrintResult,
   type PrintSource,
+  type SendRawOptions,
 } from './printer.js';
 export {
   enableBrowserImages,
