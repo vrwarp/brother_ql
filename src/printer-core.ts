@@ -50,6 +50,57 @@ import {
 } from './usb/discovery.js';
 import { UsbTransport, type MinimalUsbDevice, type TransportOptions } from './usb/transport.js';
 
+/*
+ * Everything a transport-only consumer needs, re-exported here.
+ *
+ * Without this the split is only half done: reconnecting after an unplug needs
+ * `watchConnectionEvents`, a media picker needs `suggestLabels`, and platform
+ * advice for a failed claim needs `detectPlatform` — and reaching any of them
+ * through the package root would pull in the imaging pipeline this entry point
+ * exists to leave behind. `./labels` and `./models` cover the tables.
+ */
+export {
+  BROTHER_VENDOR_ID,
+  getPairedPrinterDevices,
+  isWebUsbSupported,
+  requestPrinterDevice,
+  watchConnectionEvents,
+  type ConnectionHandlers,
+} from './usb/discovery.js';
+export {
+  UsbTransport,
+  USB_CLASS_MASS_STORAGE,
+  USB_CLASS_PRINTER,
+  detectPlatform,
+  type MinimalUsbDevice,
+  type TransportEvents,
+  type TransportOptions,
+} from './usb/transport.js';
+export {
+  parseStatus,
+  suggestLabels,
+  tryParseStatus,
+  type MediaType,
+  type PhaseType,
+  type PrinterErrorFlag,
+  type PrinterStatus,
+  type StatusType,
+} from './status.js';
+export {
+  BrotherQLError,
+  BusyError,
+  DeviceDisconnectedError,
+  EditorLiteModeError,
+  InterfaceClaimError,
+  MalformedStatusError,
+  NotSupportedError,
+  PrinterStatusError,
+  StatusTimeoutError,
+  TransferTimeoutError,
+  UnknownModelError,
+  type PlatformHint,
+} from './errors.js';
+
 export interface PrintProgress {
   phase: 'converting' | 'sending' | 'printing';
   bytesSent: number;
