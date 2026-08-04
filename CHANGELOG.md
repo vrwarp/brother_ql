@@ -11,7 +11,9 @@ Changes to the Python package are not tracked here.
 ### Added
 
 - **WebUSB printing.** `BrotherQLPrinter` pairs with a printer, reports its status,
-  and prints with progress reporting and typed errors.
+  and prints with progress reporting and typed errors. Confirmed end to end on a
+  QL-810W on 2026-08-02; the remaining models rest on the protocol comparison
+  below.
 - **A transport that carries no rasteriser.** `BrotherQLPrinterCore`, exported from
   the `./printer-core` subpath, is everything about the device — pairing, claiming,
   chunked transmission, status, `sendRaw()` and the completion handshake — without

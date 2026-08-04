@@ -12,7 +12,8 @@ byte across all 19 printer models and all 27 label types.
 
 > **Status:** the protocol and imaging layers are verified against the Python
 > implementation, and the transport layer is covered by tests against a scripted
-> USB device. Printing has not yet been confirmed against physical hardware — see
+> USB device. Printing has been confirmed end to end on a **QL-810W** (2026-08-02);
+> the other eighteen models rest on the protocol comparison alone — see
 > [Hardware verification](#hardware-verification).
 
 ## Quick start
@@ -319,11 +320,16 @@ trusted publisher is configured against a package that already exists. Once
 
 ## Hardware verification
 
-The protocol is verified against the reference implementation, but printing end to
-end has not yet been confirmed on a physical printer. If you have one, the demo is
-the fastest way to try it. Worth exercising:
+**A QL-810W has printed over WebUSB (2026-08-02.)** So the path from a canvas to a
+label on a roll works, on a real printer, which is the claim the golden fixtures
+could never make on their own — they prove the bytes match the reference
+implementation, not that a printer likes them.
 
-- [ ] Pairing and opening on your platform
+Everything below is still open. Each row is a claim somebody has to make on
+hardware once, and a ticked box means it has been seen to work at least once —
+not that it is covered by a test, because none of it can be:
+
+- [x] Pairing, claiming and printing — QL-810W, 2026-08-02
 - [ ] Editor Lite on → clear error; off → works
 - [ ] `queryStatus` reports the loaded media, and `suggestLabels` picks it
 - [ ] Continuous tape: threshold and dithered
@@ -332,6 +338,15 @@ the fastest way to try it. Worth exercising:
 - [ ] Multiple copies, and per-page progress
 - [ ] Errors: wrong label loaded, cover opened mid-print, end of tape
 - [ ] Unplugging mid-job, then reconnecting without reloading the page
+
+The last three are the ones worth going out of your way for: they are the paths
+where this library does its own thinking rather than replaying the reference
+implementation, so they are the ones a fixture comparison cannot reach.
+
+The other eighteen models are unexercised. They differ in print-head width,
+invalidate-byte count and which optional commands they accept — all of it table
+data checked against the Python implementation, so the risk is low and it is not
+zero. If you run one, a note on an issue is welcome.
 
 ## Relationship to the Python package
 
