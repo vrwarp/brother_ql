@@ -298,14 +298,24 @@ Every push to `master` runs the workflow, and it does nothing when the version i
 `package.json` is already on npm — so merging anything else is not a release and
 does not need to be treated as one.
 
-**One thing has to exist first: an `NPM_TOKEN` repository secret.** An npm
-[granular access token](https://docs.npmjs.com/about-access-tokens) with write
-access to the `@vrwarp` scope; a classic automation token also works. It must not
-require a one-time password, since nobody is there to type one.
+**No credentials are involved.** The package names this repository and
+`.github/workflows/publish.yml` as a
+[trusted publisher](https://docs.npmjs.com/trusted-publishers), so npm accepts a
+short-lived OIDC token minted by the workflow run. There is no `NPM_TOKEN` secret,
+and nothing to rotate or leak. Provenance is attested automatically, which is why
+the publish step passes no `--provenance` flag.
 
-Nothing else is required. The workflow gates itself — typecheck, lint, the test
-suite and the build all run before `npm publish`, so a broken commit on `master`
-fails the job rather than shipping.
+Two consequences worth knowing if you touch that workflow:
+
+- `permissions: id-token: write` is load-bearing. Remove it and the publish fails
+  authentication, not provenance.
+- Trusted publishing needs npm >= 11.5.1, and `node-version: 22` ships npm 10.
+  Hence the `npm install -g npm@latest` step. Upgrading npm rather than raising
+  the Node version keeps the tests in that job on the same runtime CI uses.
+
+The workflow also gates itself — typecheck, lint, the test suite and the build all
+run before `npm publish`, so a broken commit on `master` fails the job rather than
+shipping.
 
 **Branch protection on `master` is worth having anyway**, requiring CI's
 *Typecheck, lint, test, build* and *Golden fixture drift* checks. Not because the
@@ -317,38 +327,9 @@ publish depends on it, but for two narrower reasons:
   output. A change that edited the port and regenerated the fixtures together
   would agree with itself and pass `npm test`, and only the Python check would
   notice.
-- Without protection, push access is publish access: a direct push to `master`
-  carrying a version bump goes to npm with no pull request and no review.
-
-To rehearse without shipping anything, run the workflow manually from the Actions
-tab with **dry run** ticked. It does every check and prints the tarball contents,
-and stops before the publish.
-
-### Getting rid of the token, after the first release
-
-[Trusted publishing](https://docs.npmjs.com/trusted-publishers) lets npm accept a
-publish on the strength of a GitHub OIDC token, so there is no long-lived
-credential in the repository at all. It cannot be used for the *first* release:
-npm's package-settings UI is where a trusted publisher is configured, and it does
-not exist until the package does. [npm/cli#8544](https://github.com/npm/cli/issues/8544)
-is the open request to lift that, and PyPI's equivalent already allows it.
-
-Note this is unrelated to linking an npm account to a GitHub account. That lets a
-*person* sign in; it grants a workflow nothing.
-
-Once `0.1.0` is on npm, the switch is: add this repository and
-`.github/workflows/publish.yml` as a trusted publisher in the package's settings,
-then in the workflow
-
-- drop `NODE_AUTH_TOKEN` and the `env:` block from the publish step,
-- drop `--provenance`, which becomes automatic and is only needed for the token
-  flow,
-- **raise the npm version.** Trusted publishing needs npm ≥ 11.5.1 and Node
-  ≥ 22.14.0. `node-version: 22` satisfies the second and *not* the first — it
-  currently ships npm 10.9.7 — so add `npm install -g npm@latest` before the
-  publish step, or move to `node-version: 24`.
-
-Then delete the `NPM_TOKEN` secret and revoke the token on npm.
+- Trusted publishing means merge access is publish access. A direct push to
+  `master` carrying a version bump goes to npm with no pull request and no review,
+  and now without even needing a token to do it.
 
 ## Hardware verification
 

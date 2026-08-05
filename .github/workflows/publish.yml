@@ -38,10 +38,11 @@ permissions:
   # `contents: read` would do for the publish itself. The write is for the tag
   # and the GitHub release at the end.
   contents: write
-  # Provenance: npm records a signed attestation tying the tarball to this
-  # workflow, this repository and this commit, which is what puts the "Built and
-  # signed on GitHub Actions" badge on the package page. Needs the `repository`
-  # field in package.json to match, which it does.
+  # How npm knows this is us. The package is configured with this repository and
+  # this workflow as a trusted publisher, so npm accepts a short-lived OIDC token
+  # minted here and there is no credential in the repository at all. It is also
+  # what gets provenance attested — automatically, under trusted publishing,
+  # which is why no `--provenance` flag appears below.
   id-token: write
 
 # Two publishes of one package at once is never what anybody wanted, and a
@@ -95,11 +96,17 @@ jobs:
         with:
           node-version: 22
           cache: npm
-          # Writes the .npmrc that makes npm honour NODE_AUTH_TOKEN. Without it
-          # `npm publish` fails with ENEEDAUTH however the secret is set — which
-          # is why neither of the other two workflows needs this line and this
-          # one does.
+          # Points npm at the registry it will authenticate against. Still
+          # required under trusted publishing, which is why neither of the other
+          # two workflows needs this line and this one does.
           registry-url: 'https://registry.npmjs.org'
+
+      # Trusted publishing needs npm >= 11.5.1, and Node 22 ships npm 10.
+      # Upgrading npm rather than raising `node-version` keeps the tests below
+      # running on the same Node the CI workflow uses — publishing an artifact
+      # tested under a different runtime than CI tested is a difference worth not
+      # having for the sake of one version constraint.
+      - run: npm install -g npm@latest
 
       - run: npm ci
 
@@ -118,15 +125,16 @@ jobs:
       - name: Show what would be published
         run: npm pack --dry-run
 
-      # `--access public` is required, not optional: the package is scoped and
-      # scoped packages are private by default, so without it a first publish
-      # either asks for a paid plan or quietly ships something nobody can
-      # install.
+      # No token, and no `--provenance`: the package names this repository and
+      # this workflow as a trusted publisher, so npm authenticates the OIDC token
+      # minted by `id-token: write` above and attests provenance on its own.
+      #
+      # `--access public` stays. It only matters for a package's first publish —
+      # which has already happened — but leaving it is free and means this
+      # workflow would still do the right thing for a new scoped package.
       - name: Publish
         if: ${{ !inputs.dry_run }}
-        run: npm publish --provenance --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --access public
 
       # Afterwards, so a failed publish never leaves a tag claiming a version
       # that did not ship. Re-running a run that published but failed here is
