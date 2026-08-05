@@ -326,13 +326,21 @@ short-lived OIDC token minted by the workflow run. There is no `NPM_TOKEN` secre
 and nothing to rotate or leak. Provenance is attested automatically, which is why
 the publish step passes no `--provenance` flag.
 
-Two consequences worth knowing if you touch that workflow:
+Three things about that workflow are load-bearing and all of them fail the *same
+unhelpful way* if disturbed — the registry answers a publish it cannot authorise
+with `404 Not Found`, naming the package and saying nothing about credentials:
 
-- `permissions: id-token: write` is load-bearing. Remove it and the publish fails
-  authentication, not provenance.
-- Trusted publishing needs npm >= 11.5.1, and `node-version: 22` ships npm 10.
-  Hence the `npm install -g npm@latest` step. Upgrading npm rather than raising
-  the Node version keeps the tests in that job on the same runtime CI uses.
+- **`permissions: id-token: write`.** Without it there is no OIDC token to mint.
+- **No `registry-url` on `actions/setup-node`**, which is the opposite of most
+  publish workflows and cost one failed release to learn. Given `registry-url`,
+  setup-node writes `//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}` into an
+  .npmrc and, with no token supplied, sets `NODE_AUTH_TOKEN` to the literal
+  string `XXXXX-XXXXX-XXXXX-XXXXX`. npm authenticates with that instead of using
+  OIDC and is refused. See [actions/setup-node#1551](https://github.com/actions/setup-node/issues/1551).
+  Omitting it loses nothing: registry.npmjs.org is npm's default.
+- **npm >= 11.5.1**, which `node-version: 22` does not provide — it ships npm 10.
+  Hence the upgrade step, which asserts the resulting version rather than trusting
+  it, so this failure at least names itself.
 
 The workflow also gates itself — typecheck, lint, the test suite and the build all
 run before `npm publish`, so a broken commit on `master` fails the job rather than

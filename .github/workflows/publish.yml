@@ -84,7 +84,13 @@ jobs:
 
           # The commit's own time, in UTC, to the minute. `%cd` is the committer
           # date, which is the moment the merge landed on master.
-          stamp=$(TZ=UTC git show -s --format=%cd --date=format:%Y%m%d%H%M HEAD)
+          #
+          # `format-local:`, not `format:`. The latter renders the commit in the
+          # timezone it was made in and ignores TZ entirely, so a merge at 05:42
+          # UTC committed from UTC-7 came out as `202608042242` — the previous
+          # day, and a number that would run backwards against a commit made an
+          # hour later somewhere east. Only `-local` respects TZ.
+          stamp=$(TZ=UTC git show -s --format=%cd --date=format-local:%Y%m%d%H%M HEAD)
 
           version="$line.$stamp"
           echo "version=$version" >> "$GITHUB_OUTPUT"
@@ -111,21 +117,49 @@ jobs:
           # Tags, so the release step can tell whether this one already exists.
           fetch-depth: 0
 
+      # Deliberately WITHOUT `registry-url`, which is the opposite of what most
+      # publish workflows do and the reason the first attempt at this failed.
+      #
+      # Given `registry-url`, setup-node writes an .npmrc containing
+      # `//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}` and — when no token
+      # is supplied — sets NODE_AUTH_TOKEN to the literal placeholder
+      # `XXXXX-XXXXX-XXXXX-XXXXX`. npm then authenticates with that garbage
+      # instead of reaching for OIDC, and the registry answers a publish it cannot
+      # authorise with `404 Not Found` rather than a 401, so the error names the
+      # package and says nothing about credentials. See
+      # https://github.com/actions/setup-node/issues/1551.
+      #
+      # Leaving it out costs nothing: registry.npmjs.org is npm's default, and
+      # with no credentials configured npm takes the tokenless path and mints the
+      # OIDC token this job has permission to request.
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
-          # Points npm at the registry it will authenticate against. Still
-          # required under trusted publishing, which is why neither of the other
-          # two workflows needs this line and this one does.
-          registry-url: 'https://registry.npmjs.org'
 
       # Trusted publishing needs npm >= 11.5.1, and Node 22 ships npm 10.
       # Upgrading npm rather than raising `node-version` keeps the tests below
       # running on the same Node the CI workflow uses — publishing an artifact
       # tested under a different runtime than CI tested is a difference worth not
       # having for the sake of one version constraint.
-      - run: npm install -g npm@latest
+      #
+      # Asserted rather than assumed, because too-old npm fails the same
+      # indistinguishable 404 as the problem above. A named failure here beats
+      # diagnosing that twice.
+      - name: Upgrade npm past the trusted-publishing floor
+        run: |
+          npm install -g npm@latest
+          version=$(npm -v)
+          echo "npm $version, node $(node -v)"
+          node -e '
+            const need = [11, 5, 1];
+            const got = process.argv[1].split(".").map(Number);
+            const ok = got[0] - need[0] || got[1] - need[1] || got[2] - need[2];
+            if (ok < 0) {
+              console.error(`npm ${process.argv[1]} is below the 11.5.1 that trusted publishing needs.`);
+              process.exit(1);
+            }
+          ' "$version"
 
       # Before the version is rewritten, so it validates against the committed
       # lockfile rather than against a package.json this job just edited.
