@@ -1,16 +1,26 @@
 name: Publish to npm
 
-# Publishes whatever version package.json names, when it lands on master.
+# Every merge to master publishes, versioned by when the commit landed.
 #
-# So a release is a version bump in a pull request: merge it and the package
-# goes out. Nothing to remember afterwards, no tag to push by hand, and the
-# thing that was reviewed is the thing that ships.
+# The version is `<major>.<minor>.<yyyymmddhhmm>` — major and minor come from
+# package.json, the patch is the commit's own timestamp in UTC. So there is
+# nothing to bump and nothing to remember: merge a pull request and the package
+# goes out, tagged, with provenance, a few minutes later.
 #
-# Every push to master runs this, including the many that change nothing about
-# the package — so the first job asks npm whether this version already exists
-# and the second one is skipped if it does. That guard is what makes the trigger
-# safe: without it every merge would attempt a republish and fail with a 403,
-# and a workflow that is expected to fail is a workflow nobody reads.
+# package.json's *patch* number is therefore ignored. What it still carries is the
+# part a timestamp cannot: compatibility. Bumping to `0.2.0` or `1.0.0` is a
+# deliberate edit that says "this breaks something", and everything after it dates
+# itself against that line.
+#
+# Minute precision rather than a date, so two releases in one day are
+# representable. A date alone is not enough: semver has no way to say "later that
+# same day" — a prerelease suffix sorts *below* the plain version, not above — so
+# the second merge of the day would have had nowhere to go.
+#
+# The timestamp comes from the commit rather than from the clock when the runner
+# happens to start, which is what keeps a re-run idempotent: the same commit
+# computes the same version, npm reports it already published, and the job skips
+# instead of shipping a duplicate under a new number.
 #
 # This deliberately does not wait on the CI workflow, and does not need to: the
 # publish job re-runs the checks itself, so a broken commit on master fails here
@@ -53,7 +63,7 @@ concurrency:
 
 jobs:
   decide:
-    name: Is this version new?
+    name: Work out the version
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.check.outputs.version }}
@@ -61,24 +71,33 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # No setup-node: this reads one JSON field and asks the registry a
-      # question, which the runner's own Node and npm do perfectly well. The
-      # publish job below pins the version that matters.
+      # No setup-node: this reads one JSON field, one git date, and asks the
+      # registry a question, which the runner's own Node and npm do perfectly
+      # well. The publish job pins the version that matters.
       - id: check
         run: |
           name=$(node -p 'require("./package.json").name')
-          version=$(node -p 'require("./package.json").version')
+
+          # Major and minor only. The patch in package.json is ignored — see the
+          # note at the top of this file.
+          line=$(node -p 'require("./package.json").version.split(".").slice(0, 2).join(".")')
+
+          # The commit's own time, in UTC, to the minute. `%cd` is the committer
+          # date, which is the moment the merge landed on master.
+          stamp=$(TZ=UTC git show -s --format=%cd --date=format:%Y%m%d%H%M HEAD)
+
+          version="$line.$stamp"
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
-          # `npm view` exits non-zero for a version that does not exist — and
-          # for a package that has never been published at all, which is where
-          # this repository starts.
+          # Normally new by construction. This catches the two cases where it is
+          # not: a re-run of this same commit, and two commits landing inside one
+          # minute. `npm view` exits non-zero for a version that does not exist.
           if npm view "$name@$version" version >/dev/null 2>&1; then
             echo "published=true" >> "$GITHUB_OUTPUT"
             echo "::notice::$name@$version is already on npm. Nothing to do."
           else
             echo "published=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::$name@$version is not on npm. Publishing."
+            echo "::notice::Publishing $name@$version."
           fi
 
   publish:
@@ -108,6 +127,8 @@ jobs:
       # having for the sake of one version constraint.
       - run: npm install -g npm@latest
 
+      # Before the version is rewritten, so it validates against the committed
+      # lockfile rather than against a package.json this job just edited.
       - run: npm ci
 
       # The same checks CI runs, because nothing else stands between a merge and
@@ -117,6 +138,19 @@ jobs:
       - run: npm run typecheck
       - run: npm run lint
       - run: npm test
+
+      # npm publishes what package.json says, so the computed version has to land
+      # there first. Nothing is committed — this edit exists only in the runner.
+      - name: Set the version
+        env:
+          VERSION: ${{ needs.decide.outputs.version }}
+        run: npm version "$VERSION" --no-git-tag-version --allow-same-version
+
+      # After the version is set, not before. `VERSION` in the bundle is
+      # substituted from package.json at build time, so building first would bake
+      # the placeholder and leave the pack preview below describing a `dist` that
+      # is not the one shipped. `prepublishOnly` would rebuild it correctly during
+      # publish, but a preview that lies is worse than no preview.
       - run: npm run build
 
       # What the tarball would contain, in the log, before anything is uploaded.
@@ -138,7 +172,14 @@ jobs:
 
       # Afterwards, so a failed publish never leaves a tag claiming a version
       # that did not ship. Re-running a run that published but failed here is
-      # safe: `decide` skips the publish and this picks up where it stopped.
+      # safe: the version is derived from the commit, so `decide` computes the
+      # same one, finds it on npm, and this picks up where it stopped.
+      #
+      # Notes are generated from the commits since the last tag, which with a
+      # release per merge is exactly the pull request that triggered it. The
+      # CHANGELOG is not read: a timestamped version will never have a section of
+      # its own, and it stays what it is better at being — a curated account of
+      # what changed across the whole `0.1` line rather than per-release notes.
       - name: Tag and release
         if: ${{ !inputs.dry_run }}
         env:
@@ -156,18 +197,4 @@ jobs:
           git tag -a "$tag" -m "$tag"
           git push origin "$tag"
 
-          # The CHANGELOG section for this version: everything between
-          # `## [1.2.3]` and the next `## ` heading. A release whose notes were
-          # still sitting under `[Unreleased]` at merge time falls back to the
-          # commit list, which is honest rather than empty.
-          notes=$(awk -v v="$VERSION" '
-            $0 ~ "^## \\[" v "\\]" { collecting = 1; next }
-            collecting && /^## / { exit }
-            collecting { print }
-          ' CHANGELOG.md)
-
-          if [ -n "$(printf '%s' "$notes" | tr -d '[:space:]')" ]; then
-            printf '%s\n' "$notes" | gh release create "$tag" --title "$tag" --notes-file -
-          else
-            gh release create "$tag" --title "$tag" --generate-notes
-          fi
+          gh release create "$tag" --title "$tag" --generate-notes

@@ -181,5 +181,12 @@ export {
   type PlatformHint,
 } from './errors.js';
 
-/** Package version. */
-export const VERSION = '0.1.0';
+/**
+ * Package version.
+ *
+ * Substituted at build time from package.json — see `tsup.config.ts`. A literal
+ * here would be wrong on every release: the publish workflow derives the version
+ * from the commit that triggered it, so nothing in the source tree knows it.
+ */
+declare const __PKG_VERSION__: string;
+export const VERSION: string = __PKG_VERSION__;

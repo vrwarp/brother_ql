@@ -287,16 +287,37 @@ directly instead of surfacing as a mysterious protocol mismatch.
 
 ## Releasing
 
-A release is a version bump. Open a pull request that raises `version` in
-`package.json` and moves the `[Unreleased]` heading in `CHANGELOG.md` down to
-`## [x.y.z] - YYYY-MM-DD`; when it merges,
-[`.github/workflows/publish.yml`](.github/workflows/publish.yml) runs the test
-suite, publishes to npm with provenance, tags `vx.y.z` and opens a GitHub release
-with that changelog section as its notes.
+**Every merge to `master` is a release.** There is no version to bump and no tag
+to push: [`.github/workflows/publish.yml`](.github/workflows/publish.yml) runs the
+test suite, publishes to npm, tags the result and opens a GitHub release whose
+notes are the commits since the last one.
 
-Every push to `master` runs the workflow, and it does nothing when the version in
-`package.json` is already on npm — so merging anything else is not a release and
-does not need to be treated as one.
+Versions are `<major>.<minor>.<yyyymmddhhmm>` — the major and minor come from
+`package.json`, and the patch is the timestamp of the commit that landed, in UTC.
+So `0.1.202608050530`.
+
+**`package.json`'s patch number is ignored.** What that file still carries is the
+part a timestamp cannot: compatibility. Editing it to `0.2.0` is a deliberate
+statement that something broke, and every release after it dates itself against
+that line. Consumers keep using ordinary caret ranges — `^0.1.0` accepts every
+`0.1.<timestamp>` and correctly refuses `0.2.x`.
+
+Three details behind that choice:
+
+- **Minutes, not just a date.** Semver cannot express "later the same day": a
+  prerelease suffix sorts *below* the plain version, not above. With date-only
+  versions a second merge in one day would have had nowhere to go.
+- **The commit's time, not the runner's.** That makes the version a function of
+  the commit, so re-running a workflow recomputes the same one, npm reports it
+  already published, and the job skips instead of shipping a duplicate under a
+  new number.
+- **`VERSION` in the bundle is substituted from `package.json` at build time**
+  (see `tsup.config.ts`). It has to be — nothing in the source tree knows the
+  version, so a literal would be wrong on every release.
+
+The CHANGELOG is no longer per-release notes, because a timestamped version will
+never have a section of its own. It is a curated account of what changed across
+the `0.1` line, and the generated release notes cover the per-merge detail.
 
 **No credentials are involved.** The package names this repository and
 `.github/workflows/publish.yml` as a

@@ -1,4 +1,17 @@
+import { readFileSync } from 'node:fs';
 import { defineConfig } from 'tsup';
+
+/*
+ * The version, read from package.json at build time.
+ *
+ * It cannot be a literal in the source. The publish workflow computes the
+ * version from the commit's timestamp and writes it into package.json in the
+ * runner, so a hand-maintained constant would report whatever was last committed
+ * — which is never what shipped.
+ */
+const { version } = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8')) as {
+  version: string;
+};
 
 export default defineConfig({
   /*
@@ -24,4 +37,5 @@ export default defineConfig({
   sourcemap: true,
   clean: true,
   treeshake: true,
+  define: { __PKG_VERSION__: JSON.stringify(version) },
 });
