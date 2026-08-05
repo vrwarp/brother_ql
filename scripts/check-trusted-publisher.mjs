@@ -158,6 +158,38 @@ if (claims === null) {
   );
 }
 
+/*
+ * What the registry's statuses mean here, which is not what they say.
+ *
+ * `404 package not found` in particular does not mean the package is missing —
+ * it can be sitting in the public registry with published versions and still
+ * produce this. What is not found is a *trusted-publisher configuration*
+ * matching this package, repository and workflow. The endpoint is looking up
+ * the configuration, not the package.
+ */
+const INTERPRETATIONS = {
+  401: () =>
+    'The registry would not accept the OIDC token itself, which is a problem ' +
+    'with the token rather than with any configuration — check that the `aud` ' +
+    'claim above is `npm:registry.npmjs.org`.',
+  403: () =>
+    'The registry recognised this workflow and refused it anyway. If an ' +
+    'Environment is configured on npmjs.com, this job has to declare the same ' +
+    'one; `environment` above is what this job actually presents.',
+  404: ({ pkg, repository, workflow }) =>
+    'This does not mean the package is missing — it can be published and public ' +
+    'and still produce a 404 here. What the registry could not find is a ' +
+    'trusted-publisher configuration matching this package and this workflow. On\n' +
+    `  https://www.npmjs.com/package/${pkg}/access\n` +
+    'the Trusted Publisher fields have to be exactly:\n' +
+    `  Repository:  ${repository}\n` +
+    `  Workflow:    ${workflow}   (the filename only, case-sensitive)\n` +
+    '  Environment: (leave empty)\n' +
+    'And on that package. A configuration attached to a similarly named one — ' +
+    'unscoped, or a leftover from a first publish — looks precisely like this ' +
+    'from out here.',
+};
+
 const result = await exchange(idToken, name);
 
 if (result.ok && result.token) {
@@ -171,4 +203,18 @@ problem(
     'will fail as ENEEDAUTH, which is npm reporting that it ended up with no ' +
     'credential rather than that it was rejected.',
 );
+
+const interpretation = INTERPRETATIONS[result.status];
+if (interpretation) {
+  console.log(
+    `\n${interpretation({
+      pkg: name,
+      repository: claims?.repository ?? '(see the claims above)',
+      /* `owner/repo/.github/workflows/publish.yml@refs/heads/x` — npm wants the
+       * basename, and this is the only place it can be read from. */
+      workflow: claims?.job_workflow_ref?.split('@')[0]?.split('/').pop() ?? 'publish.yml',
+    })}`,
+  );
+}
+
 process.exit(0);

@@ -377,6 +377,16 @@ they distinguish "GitHub would not mint a token", "the registry refused it and
 said why", and "the token was fine and the upload failed" — three problems that
 otherwise look identical.
 
+One registry message needs translating, and the script prints the translation:
+**`404 OIDC token exchange error - package not found` does not mean the package
+is missing.** It can be published, public and installable and still produce that.
+The exchange endpoint is looking up the package's *trusted-publisher
+configuration*, and a 404 is it saying there is no configuration matching this
+package, this repository and this workflow — most often because the repository or
+the workflow filename on npmjs.com does not match character for character, or
+because the configuration was attached to a different package than the one being
+published.
+
 The workflow also gates itself — typecheck, lint, the test suite and the build all
 run before `npm publish`, so a broken commit on `master` fails the job rather than
 shipping.
