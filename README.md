@@ -324,10 +324,31 @@ To rehearse without shipping anything, run the workflow manually from the Action
 tab with **dry run** ticked. It does every check and prints the tarball contents,
 and stops before the publish.
 
-The first release cannot use npm's
-[trusted publishing](https://docs.npmjs.com/trusted-publishers), because a
-trusted publisher is configured against a package that already exists. Once
-`0.1.0` is out, switching to it removes the need for the token entirely.
+### Getting rid of the token, after the first release
+
+[Trusted publishing](https://docs.npmjs.com/trusted-publishers) lets npm accept a
+publish on the strength of a GitHub OIDC token, so there is no long-lived
+credential in the repository at all. It cannot be used for the *first* release:
+npm's package-settings UI is where a trusted publisher is configured, and it does
+not exist until the package does. [npm/cli#8544](https://github.com/npm/cli/issues/8544)
+is the open request to lift that, and PyPI's equivalent already allows it.
+
+Note this is unrelated to linking an npm account to a GitHub account. That lets a
+*person* sign in; it grants a workflow nothing.
+
+Once `0.1.0` is on npm, the switch is: add this repository and
+`.github/workflows/publish.yml` as a trusted publisher in the package's settings,
+then in the workflow
+
+- drop `NODE_AUTH_TOKEN` and the `env:` block from the publish step,
+- drop `--provenance`, which becomes automatic and is only needed for the token
+  flow,
+- **raise the npm version.** Trusted publishing needs npm ≥ 11.5.1 and Node
+  ≥ 22.14.0. `node-version: 22` satisfies the second and *not* the first — it
+  currently ships npm 10.9.7 — so add `npm install -g npm@latest` before the
+  publish step, or move to `node-version: 24`.
+
+Then delete the `NPM_TOKEN` secret and revoke the token on npm.
 
 ## Hardware verification
 
