@@ -331,13 +331,18 @@ unhelpful way* if disturbed — the registry answers a publish it cannot authori
 with `404 Not Found`, naming the package and saying nothing about credentials:
 
 - **`permissions: id-token: write`.** Without it there is no OIDC token to mint.
-- **No `registry-url` on `actions/setup-node`**, which is the opposite of most
-  publish workflows and cost one failed release to learn. Given `registry-url`,
-  setup-node writes `//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}` into an
-  .npmrc and, with no token supplied, sets `NODE_AUTH_TOKEN` to the literal
-  string `XXXXX-XXXXX-XXXXX-XXXXX`. npm authenticates with that instead of using
-  OIDC and is refused. See [actions/setup-node#1551](https://github.com/actions/setup-node/issues/1551).
-  Omitting it loses nothing: registry.npmjs.org is npm's default.
+- **The step that deletes the `_authToken` line from the .npmrc.** This is the
+  awkward one, and it cost two failed releases to get right.
+  `actions/setup-node` given `registry-url` writes
+  `//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}` and, with no token
+  supplied, sets `NODE_AUTH_TOKEN` to the literal string
+  `XXXXX-XXXXX-XXXXX-XXXXX` — so npm authenticates with garbage and is refused
+  with a `404`. Dropping `registry-url` instead is not the fix: npm then has no
+  registry entry to attempt the exchange against and fails `ENEEDAUTH` without
+  trying. The registry line has to stay and the auth line has to *go*, and go
+  rather than be blanked, because npm reads even an empty `_authToken` as
+  "credentials are configured" and skips OIDC.
+  See [actions/setup-node#1551](https://github.com/actions/setup-node/issues/1551).
 - **npm >= 11.5.1**, which `node-version: 22` does not provide — it ships npm 10.
   Hence the upgrade step, which asserts the resulting version rather than trusting
   it, so this failure at least names itself.
