@@ -1,0 +1,200 @@
+name: Publish to npm
+
+# Every merge to master publishes, versioned by when the commit landed.
+#
+# The version is `<major>.<minor>.<yyyymmddhhmm>` — major and minor come from
+# package.json, the patch is the commit's own timestamp in UTC. So there is
+# nothing to bump and nothing to remember: merge a pull request and the package
+# goes out, tagged, with provenance, a few minutes later.
+#
+# package.json's *patch* number is therefore ignored. What it still carries is the
+# part a timestamp cannot: compatibility. Bumping to `0.2.0` or `1.0.0` is a
+# deliberate edit that says "this breaks something", and everything after it dates
+# itself against that line.
+#
+# Minute precision rather than a date, so two releases in one day are
+# representable. A date alone is not enough: semver has no way to say "later that
+# same day" — a prerelease suffix sorts *below* the plain version, not above — so
+# the second merge of the day would have had nowhere to go.
+#
+# The timestamp comes from the commit rather than from the clock when the runner
+# happens to start, which is what keeps a re-run idempotent: the same commit
+# computes the same version, npm reports it already published, and the job skips
+# instead of shipping a duplicate under a new number.
+#
+# This deliberately does not wait on the CI workflow, and does not need to: the
+# publish job re-runs the checks itself, so a broken commit on master fails here
+# rather than shipping. `npm test` is the one that carries the weight — it
+# contains the golden comparison that pins the wire protocol byte for byte
+# against fixtures the Python implementation produced.
+#
+# The one CI check not repeated below is `Golden fixture drift`, which compares
+# those committed fixtures against freshly generated Python output. It is left
+# out on purpose: installing a legacy `packbits` sdist can fail for reasons that
+# have nothing to do with the release, and a fragile step on the publish path
+# buys less than it costs. Branch protection is the better place for it — see
+# the Releasing section of the README.
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Run every check and pack the tarball, but do not publish'
+        type: boolean
+        default: false
+
+permissions:
+  # `contents: read` would do for the publish itself. The write is for the tag
+  # and the GitHub release at the end.
+  contents: write
+  # How npm knows this is us. The package is configured with this repository and
+  # this workflow as a trusted publisher, so npm accepts a short-lived OIDC token
+  # minted here and there is no credential in the repository at all. It is also
+  # what gets provenance attested — automatically, under trusted publishing,
+  # which is why no `--provenance` flag appears below.
+  id-token: write
+
+# Two publishes of one package at once is never what anybody wanted, and a
+# half-finished one is worse than a slow one — so queue rather than cancel.
+concurrency:
+  group: npm-publish
+  cancel-in-progress: false
+
+jobs:
+  decide:
+    name: Work out the version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+      published: ${{ steps.check.outputs.published }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # No setup-node: this reads one JSON field, one git date, and asks the
+      # registry a question, which the runner's own Node and npm do perfectly
+      # well. The publish job pins the version that matters.
+      - id: check
+        run: |
+          name=$(node -p 'require("./package.json").name')
+
+          # Major and minor only. The patch in package.json is ignored — see the
+          # note at the top of this file.
+          line=$(node -p 'require("./package.json").version.split(".").slice(0, 2).join(".")')
+
+          # The commit's own time, in UTC, to the minute. `%cd` is the committer
+          # date, which is the moment the merge landed on master.
+          stamp=$(TZ=UTC git show -s --format=%cd --date=format:%Y%m%d%H%M HEAD)
+
+          version="$line.$stamp"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+          # Normally new by construction. This catches the two cases where it is
+          # not: a re-run of this same commit, and two commits landing inside one
+          # minute. `npm view` exits non-zero for a version that does not exist.
+          if npm view "$name@$version" version >/dev/null 2>&1; then
+            echo "published=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::$name@$version is already on npm. Nothing to do."
+          else
+            echo "published=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Publishing $name@$version."
+          fi
+
+  publish:
+    name: Publish
+    needs: decide
+    if: needs.decide.outputs.published == 'false'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Tags, so the release step can tell whether this one already exists.
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          # Points npm at the registry it will authenticate against. Still
+          # required under trusted publishing, which is why neither of the other
+          # two workflows needs this line and this one does.
+          registry-url: 'https://registry.npmjs.org'
+
+      # Trusted publishing needs npm >= 11.5.1, and Node 22 ships npm 10.
+      # Upgrading npm rather than raising `node-version` keeps the tests below
+      # running on the same Node the CI workflow uses — publishing an artifact
+      # tested under a different runtime than CI tested is a difference worth not
+      # having for the sake of one version constraint.
+      - run: npm install -g npm@latest
+
+      # Before the version is rewritten, so it validates against the committed
+      # lockfile rather than against a package.json this job just edited.
+      - run: npm ci
+
+      # The same checks CI runs, because nothing else stands between a merge and
+      # the registry. `npm test` is the one that matters most: the golden suite
+      # compares complete print jobs byte for byte, so a protocol regression
+      # cannot reach npm even if somebody merged past a red build.
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm test
+
+      # npm publishes what package.json says, so the computed version has to land
+      # there first. Nothing is committed — this edit exists only in the runner.
+      - name: Set the version
+        env:
+          VERSION: ${{ needs.decide.outputs.version }}
+        run: npm version "$VERSION" --no-git-tag-version --allow-same-version
+
+      # After the version is set, not before. `VERSION` in the bundle is
+      # substituted from package.json at build time, so building first would bake
+      # the placeholder and leave the pack preview below describing a `dist` that
+      # is not the one shipped. `prepublishOnly` would rebuild it correctly during
+      # publish, but a preview that lies is worse than no preview.
+      - run: npm run build
+
+      # What the tarball would contain, in the log, before anything is uploaded.
+      # `files` in package.json is an allowlist, and this is the only place a
+      # mistake in it becomes visible.
+      - name: Show what would be published
+        run: npm pack --dry-run
+
+      # No token, and no `--provenance`: the package names this repository and
+      # this workflow as a trusted publisher, so npm authenticates the OIDC token
+      # minted by `id-token: write` above and attests provenance on its own.
+      #
+      # `--access public` stays. It only matters for a package's first publish —
+      # which has already happened — but leaving it is free and means this
+      # workflow would still do the right thing for a new scoped package.
+      - name: Publish
+        if: ${{ !inputs.dry_run }}
+        run: npm publish --access public
+
+      # Afterwards, so a failed publish never leaves a tag claiming a version
+      # that did not ship. Re-running a run that published but failed here is
+      # safe: the version is derived from the commit, so `decide` computes the
+      # same one, finds it on npm, and this picks up where it stopped.
+      #
+      # Notes are generated from the commits since the last tag, which with a
+      # release per merge is exactly the pull request that triggered it. The
+      # CHANGELOG is not read: a timestamped version will never have a section of
+      # its own, and it stays what it is better at being — a curated account of
+      # what changed across the whole `0.1` line rather than per-release notes.
+      - name: Tag and release
+        if: ${{ !inputs.dry_run }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.decide.outputs.version }}
+        run: |
+          tag="v$VERSION"
+          if git rev-parse "$tag" >/dev/null 2>&1; then
+            echo "::notice::$tag already exists."
+            exit 0
+          fi
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git tag -a "$tag" -m "$tag"
+          git push origin "$tag"
+
+          gh release create "$tag" --title "$tag" --generate-notes

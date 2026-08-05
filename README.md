@@ -12,7 +12,8 @@ byte across all 19 printer models and all 27 label types.
 
 > **Status:** the protocol and imaging layers are verified against the Python
 > implementation, and the transport layer is covered by tests against a scripted
-> USB device. Printing has not yet been confirmed against physical hardware — see
+> USB device. Printing has been confirmed end to end on a **QL-810W** (2026-08-02);
+> the other eighteen models rest on the protocol comparison alone — see
 > [Hardware verification](#hardware-verification).
 
 ## Quick start
@@ -171,6 +172,43 @@ produced by the same code that feeds the printer.
 `analyzeInstructions(bytes)` and `summarizeJob(bytes)` split a job back into
 individual commands, which is handy when comparing against a capture.
 
+### Rasterising in a Web Worker
+
+The imaging pipeline is synchronous and takes tens of milliseconds on a label of
+any size, which is long enough to drop frames in a UI that is doing anything
+else. It is also entirely DOM-free and works on plain `Uint8Array`s, so it moves
+into a worker cleanly. What cannot move is the transport: `navigator.usb` is not
+exposed to workers.
+
+Import the two halves separately so neither side carries the other's weight:
+
+```ts
+// worker.ts — the expensive part, off the main thread
+import { createJob } from '@vrwarp/brother-ql-webusb/convert';
+
+self.onmessage = ({ data }) => {
+  const bytes = createJob(data.model, [data.image], data.label, { copies: data.copies });
+  self.postMessage(bytes, [bytes.buffer]); // transfer, don't copy
+};
+```
+
+```ts
+// main.ts — the device, which has to live here
+import { BrotherQLPrinterCore } from '@vrwarp/brother-ql-webusb/printer-core';
+
+const [printer] = await BrotherQLPrinterCore.getPairedDevices({ model: 'QL-810W' });
+await printer.open();
+await printer.sendRaw(bytesFromWorker, { pageCount: copies });
+```
+
+`BrotherQLPrinterCore` is what `BrotherQLPrinter` is built on: same pairing,
+claiming, chunked transmission, status handling and completion handshake, minus
+`print()`. Render at the exact `expectedImageSize(label)` dot size and the
+normaliser has nothing to resample.
+
+`./labels` and `./models` are exported the same way, for a media or model picker
+that has no reason to pull in either half.
+
 ### Errors
 
 Every error carries a stable `code`:
@@ -247,13 +285,85 @@ Input images are generated procedurally on both sides rather than committed, and
 the manifest records a SHA-256 of each so a drift in the generators is reported
 directly instead of surfacing as a mysterious protocol mismatch.
 
+## Releasing
+
+**Every merge to `master` is a release.** There is no version to bump and no tag
+to push: [`.github/workflows/publish.yml`](.github/workflows/publish.yml) runs the
+test suite, publishes to npm, tags the result and opens a GitHub release whose
+notes are the commits since the last one.
+
+Versions are `<major>.<minor>.<yyyymmddhhmm>` — the major and minor come from
+`package.json`, and the patch is the timestamp of the commit that landed, in UTC.
+So `0.1.202608050530`.
+
+**`package.json`'s patch number is ignored.** What that file still carries is the
+part a timestamp cannot: compatibility. Editing it to `0.2.0` is a deliberate
+statement that something broke, and every release after it dates itself against
+that line. Consumers keep using ordinary caret ranges — `^0.1.0` accepts every
+`0.1.<timestamp>` and correctly refuses `0.2.x`.
+
+Three details behind that choice:
+
+- **Minutes, not just a date.** Semver cannot express "later the same day": a
+  prerelease suffix sorts *below* the plain version, not above. With date-only
+  versions a second merge in one day would have had nowhere to go.
+- **The commit's time, not the runner's.** That makes the version a function of
+  the commit, so re-running a workflow recomputes the same one, npm reports it
+  already published, and the job skips instead of shipping a duplicate under a
+  new number.
+- **`VERSION` in the bundle is substituted from `package.json` at build time**
+  (see `tsup.config.ts`). It has to be — nothing in the source tree knows the
+  version, so a literal would be wrong on every release.
+
+The CHANGELOG is no longer per-release notes, because a timestamped version will
+never have a section of its own. It is a curated account of what changed across
+the `0.1` line, and the generated release notes cover the per-merge detail.
+
+**No credentials are involved.** The package names this repository and
+`.github/workflows/publish.yml` as a
+[trusted publisher](https://docs.npmjs.com/trusted-publishers), so npm accepts a
+short-lived OIDC token minted by the workflow run. There is no `NPM_TOKEN` secret,
+and nothing to rotate or leak. Provenance is attested automatically, which is why
+the publish step passes no `--provenance` flag.
+
+Two consequences worth knowing if you touch that workflow:
+
+- `permissions: id-token: write` is load-bearing. Remove it and the publish fails
+  authentication, not provenance.
+- Trusted publishing needs npm >= 11.5.1, and `node-version: 22` ships npm 10.
+  Hence the `npm install -g npm@latest` step. Upgrading npm rather than raising
+  the Node version keeps the tests in that job on the same runtime CI uses.
+
+The workflow also gates itself — typecheck, lint, the test suite and the build all
+run before `npm publish`, so a broken commit on `master` fails the job rather than
+shipping.
+
+**Branch protection on `master` is worth having anyway**, requiring CI's
+*Typecheck, lint, test, build* and *Golden fixture drift* checks. Not because the
+publish depends on it, but for two narrower reasons:
+
+- *Golden fixture drift* is the one check the publish job does not repeat.
+  `npm test` compares this implementation against the **committed** fixtures;
+  that job compares the committed fixtures against freshly generated Python
+  output. A change that edited the port and regenerated the fixtures together
+  would agree with itself and pass `npm test`, and only the Python check would
+  notice.
+- Trusted publishing means merge access is publish access. A direct push to
+  `master` carrying a version bump goes to npm with no pull request and no review,
+  and now without even needing a token to do it.
+
 ## Hardware verification
 
-The protocol is verified against the reference implementation, but printing end to
-end has not yet been confirmed on a physical printer. If you have one, the demo is
-the fastest way to try it. Worth exercising:
+**A QL-810W has printed over WebUSB (2026-08-02.)** So the path from a canvas to a
+label on a roll works, on a real printer, which is the claim the golden fixtures
+could never make on their own — they prove the bytes match the reference
+implementation, not that a printer likes them.
 
-- [ ] Pairing and opening on your platform
+Everything below is still open. Each row is a claim somebody has to make on
+hardware once, and a ticked box means it has been seen to work at least once —
+not that it is covered by a test, because none of it can be:
+
+- [x] Pairing, claiming and printing — QL-810W, 2026-08-02
 - [ ] Editor Lite on → clear error; off → works
 - [ ] `queryStatus` reports the loaded media, and `suggestLabels` picks it
 - [ ] Continuous tape: threshold and dithered
@@ -262,6 +372,15 @@ the fastest way to try it. Worth exercising:
 - [ ] Multiple copies, and per-page progress
 - [ ] Errors: wrong label loaded, cover opened mid-print, end of tape
 - [ ] Unplugging mid-job, then reconnecting without reloading the page
+
+The last three are the ones worth going out of your way for: they are the paths
+where this library does its own thinking rather than replaying the reference
+implementation, so they are the ones a fixture comparison cannot reach.
+
+The other eighteen models are unexercised. They differ in print-head width,
+invalidate-byte count and which optional commands they accept — all of it table
+data checked against the Python implementation, so the risk is low and it is not
+zero. If you run one, a note on an issue is welcome.
 
 ## Relationship to the Python package
 

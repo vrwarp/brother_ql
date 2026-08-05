@@ -33,6 +33,10 @@
 // --- high level -----------------------------------------------------------
 export {
   BrotherQLPrinter,
+  // Re-exported through printer.js, which is where a reader looking for "the
+  // printer" will land. `@vrwarp/brother-ql-webusb/printer-core` is the import
+  // to use when the imaging pipeline's weight is not wanted.
+  BrotherQLPrinterCore,
   type ImageNormalizer,
   type PrinterEvents,
   type PrinterOptions,
@@ -40,6 +44,7 @@ export {
   type PrintProgress,
   type PrintResult,
   type PrintSource,
+  type SendRawOptions,
 } from './printer.js';
 export {
   enableBrowserImages,
@@ -176,5 +181,12 @@ export {
   type PlatformHint,
 } from './errors.js';
 
-/** Package version. */
-export const VERSION = '0.1.0';
+/**
+ * Package version.
+ *
+ * Substituted at build time from package.json — see `tsup.config.ts`. A literal
+ * here would be wrong on every release: the publish workflow derives the version
+ * from the commit that triggered it, so nothing in the source tree knows it.
+ */
+declare const __PKG_VERSION__: string;
+export const VERSION: string = __PKG_VERSION__;

@@ -11,7 +11,18 @@ Changes to the Python package are not tracked here.
 ### Added
 
 - **WebUSB printing.** `BrotherQLPrinter` pairs with a printer, reports its status,
-  and prints with progress reporting and typed errors.
+  and prints with progress reporting and typed errors. Confirmed end to end on a
+  QL-810W on 2026-08-02; the remaining models rest on the protocol comparison
+  below.
+- **A transport that carries no rasteriser.** `BrotherQLPrinterCore`, exported from
+  the `./printer-core` subpath, is everything about the device — pairing, claiming,
+  chunked transmission, status, `sendRaw()` and the completion handshake — without
+  the imaging pipeline. `BrotherQLPrinter` extends it with `print()`. This is for
+  callers that rasterise off the main thread: `navigator.usb` is unavailable in a
+  Web Worker, so the transport has to stay on the main thread while `convert` runs
+  in the worker, and before the split such a caller bundled the imaging code twice.
+  `./convert`, `./labels` and `./models` are exported as subpaths for the same
+  reason. A test walks the module graph so the split cannot regress unnoticed.
 - **Full protocol port.** All 19 printer models and 27 label types from the Python
   package, including two colour printing on the QL-800 series, PackBits
   compression, 600 dpi, multi-page jobs and per-model capability gating.
