@@ -17,6 +17,22 @@ export default tseslint.config(
     },
   },
   {
+    // Build and release scripts run under Node, so the globals the default
+    // ECMAScript environment does not know about have to be named. Declared
+    // here rather than repo-wide so `no-undef` still catches a stray `process`
+    // in src/, where there is no Node to provide one.
+    files: ['scripts/**/*.mjs'],
+    languageOptions: {
+      globals: {
+        Buffer: 'readonly',
+        URL: 'readonly',
+        console: 'readonly',
+        fetch: 'readonly',
+        process: 'readonly',
+      },
+    },
+  },
+  {
     // The published library targets the browser. Node built-ins are available
     // to the tests and to build tooling, but must never reach src/.
     files: ['src/**/*.ts'],

@@ -149,10 +149,11 @@ jobs:
           echo "npmrc now:"
           sed 's/^/  /' "$npmrc"
 
-          # Without these there is no token to exchange, and the failure is the
-          # same indistinguishable auth error. Naming it here costs one line.
-          if [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
-            echo "::error::No ACTIONS_ID_TOKEN_REQUEST_URL. Is \`permissions: id-token: write\` still set?"
+          # Without both of these there is no token to exchange, and the failure
+          # is the same indistinguishable auth error. Naming it here costs two
+          # lines. npm checks both, so checking one is checking half of it.
+          if [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ] || [ -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ]; then
+            echo "::error::No ACTIONS_ID_TOKEN_REQUEST_URL/TOKEN. Is \`permissions: id-token: write\` still set?"
             exit 1
           fi
           echo "OIDC token endpoint is available."
@@ -165,21 +166,38 @@ jobs:
       #
       # Asserted rather than assumed, because too-old npm fails the same
       # indistinguishable 404 as the problem above. A named failure here beats
-      # diagnosing that twice.
+      # diagnosing that twice. Node has a floor too — 22.14.0 — which
+      # `node-version: 22` clears comfortably today but silently would not if it
+      # were ever pinned lower.
       - name: Upgrade npm past the trusted-publishing floor
         run: |
           npm install -g npm@latest
-          version=$(npm -v)
-          echo "npm $version, node $(node -v)"
+          echo "npm $(npm -v), node $(node -v)"
           node -e '
-            const need = [11, 5, 1];
-            const got = process.argv[1].split(".").map(Number);
-            const ok = got[0] - need[0] || got[1] - need[1] || got[2] - need[2];
-            if (ok < 0) {
-              console.error(`npm ${process.argv[1]} is below the 11.5.1 that trusted publishing needs.`);
-              process.exit(1);
-            }
-          ' "$version"
+            const floors = [["npm", [11, 5, 1]], ["node", [22, 14, 0]]];
+            let bad = false;
+            floors.forEach(([tool, need], i) => {
+              const got = process.argv[1 + i].replace(/^v/, "").split(".").map(Number);
+              if ((got[0] - need[0] || got[1] - need[1] || got[2] - need[2]) < 0) {
+                console.error(`${tool} ${got.join(".")} is below the ${need.join(".")} that trusted publishing needs.`);
+                bad = true;
+              }
+            });
+            if (bad) process.exit(1);
+          ' "$(npm -v)" "$(node -v)"
+
+      # Ask the registry whether it will accept this workflow, and say so in the
+      # log, because `npm publish` will not: npm's OIDC helper is documented to
+      # never throw, so a refused token exchange leaves it with no credential
+      # and the publish reports `ENEEDAUTH` — the symptom of having no token,
+      # never the reason the token was refused.
+      #
+      # Runs on a dry run too, deliberately. A dry run that skips `npm publish`
+      # skips the only step that has ever failed here, which makes it a poor
+      # rehearsal; this step is the part of publishing a dry run can actually
+      # exercise. It never fails the job — see the script.
+      - name: Check the registry accepts this workflow
+        run: node scripts/check-trusted-publisher.mjs
 
       # Before the version is rewritten, so it validates against the committed
       # lockfile rather than against a package.json this job just edited.
@@ -220,9 +238,16 @@ jobs:
       # `--access public` stays. It only matters for a package's first publish —
       # which has already happened — but leaving it is free and means this
       # workflow would still do the right thing for a new scoped package.
+      #
+      # `--loglevel verbose` is not noise-for-its-own-sake: npm logs the entire
+      # OIDC exchange — the audience it asked for, the endpoint it called, and
+      # the registry's message if the exchange was refused — at exactly that
+      # level and nowhere else. Without it a failure prints four lines saying
+      # `ENEEDAUTH` and nothing about why. `verbose` and not `silly`, which dumps
+      # the resolved config.
       - name: Publish
         if: ${{ !inputs.dry_run }}
-        run: npm publish --access public
+        run: npm publish --access public --loglevel verbose
 
       # Afterwards, so a failed publish never leaves a tag claiming a version
       # that did not ship. Re-running a run that published but failed here is
