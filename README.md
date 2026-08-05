@@ -344,8 +344,48 @@ with `404 Not Found`, naming the package and saying nothing about credentials:
   "credentials are configured" and skips OIDC.
   See [actions/setup-node#1551](https://github.com/actions/setup-node/issues/1551).
 - **npm >= 11.5.1**, which `node-version: 22` does not provide — it ships npm 10.
-  Hence the upgrade step, which asserts the resulting version rather than trusting
-  it, so this failure at least names itself.
+  Hence the upgrade step, which asserts the resulting version — and Node's own
+  22.14.0 floor — rather than trusting either, so this failure at least names
+  itself.
+
+### Why an authorisation failure never says so
+
+All of the above fail as `404 Not Found` or `ENEEDAUTH`, and neither error
+mentions trusted publishing. That is not npm being terse; it is
+[by design](https://github.com/npm/cli/blob/latest/lib/utils/oidc.js). npm's OIDC
+helper "is intended to never throw", so *every* way the exchange can fail —
+missing permission, a refused token, a configuration mismatch — logs a line and
+returns nothing. `npm publish` then proceeds with no credential and reports the
+only thing it can see: that it has none.
+
+Two things in this workflow exist to get the real reason into the log:
+
+- **`scripts/check-trusted-publisher.mjs`** does by hand what npm does silently.
+  It mints the same OIDC token, prints the claims npm matches against the
+  trusted-publisher configuration — `job_workflow_ref` is the one to read, since
+  the workflow filename typed into npmjs.com must equal its basename, case for
+  case — and POSTs the exchange endpoint so the registry's own message lands in
+  the log. It runs on a dry run too, which is what makes a dry run worth
+  anything: skipping `npm publish` skips the only step that has ever failed here.
+  It never fails the job, so a bug in the diagnostic cannot block a working
+  release.
+- **`npm publish --loglevel verbose`.** npm logs the audience it requested, the
+  endpoint it called and the registry's reply at `verbose` and at no other level.
+
+If a release does fail, read those two before changing anything: between them
+they distinguish "GitHub would not mint a token", "the registry refused it and
+said why", and "the token was fine and the upload failed" — three problems that
+otherwise look identical.
+
+One registry message needs translating, and the script prints the translation:
+**`404 OIDC token exchange error - package not found` does not mean the package
+is missing.** It can be published, public and installable and still produce that.
+The exchange endpoint is looking up the package's *trusted-publisher
+configuration*, and a 404 is it saying there is no configuration matching this
+package, this repository and this workflow — most often because the repository or
+the workflow filename on npmjs.com does not match character for character, or
+because the configuration was attached to a different package than the one being
+published.
 
 The workflow also gates itself — typecheck, lint, the test suite and the build all
 run before `npm publish`, so a broken commit on `master` fails the job rather than
