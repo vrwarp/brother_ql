@@ -12,11 +12,18 @@ name: Publish to npm
 # safe: without it every merge would attempt a republish and fail with a 403,
 # and a workflow that is expected to fail is a workflow nobody reads.
 #
-# This deliberately does not wait on the CI workflow. Branch protection
-# requiring its two checks is what keeps an unreviewed commit off master in the
-# first place; belt and braces, the publish job runs the suite again, and
-# `npm test` contains the golden comparison that pins the wire protocol byte for
-# byte against fixtures the Python implementation produced.
+# This deliberately does not wait on the CI workflow, and does not need to: the
+# publish job re-runs the checks itself, so a broken commit on master fails here
+# rather than shipping. `npm test` is the one that carries the weight — it
+# contains the golden comparison that pins the wire protocol byte for byte
+# against fixtures the Python implementation produced.
+#
+# The one CI check not repeated below is `Golden fixture drift`, which compares
+# those committed fixtures against freshly generated Python output. It is left
+# out on purpose: installing a legacy `packbits` sdist can fail for reasons that
+# have nothing to do with the release, and a fragile step on the publish path
+# buys less than it costs. Branch protection is the better place for it — see
+# the Releasing section of the README.
 on:
   push:
     branches: [master]

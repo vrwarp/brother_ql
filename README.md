@@ -298,16 +298,27 @@ Every push to `master` runs the workflow, and it does nothing when the version i
 `package.json` is already on npm — so merging anything else is not a release and
 does not need to be treated as one.
 
-Two things need setting up once, before the first release:
+**One thing has to exist first: an `NPM_TOKEN` repository secret.** An npm
+[granular access token](https://docs.npmjs.com/about-access-tokens) with write
+access to the `@vrwarp` scope; a classic automation token also works. It must not
+require a one-time password, since nobody is there to type one.
 
-- **An `NPM_TOKEN` repository secret.** An npm
-  [granular access token](https://docs.npmjs.com/about-access-tokens) with write
-  access to the `@vrwarp` scope. A classic automation token also works. It must
-  not require a one-time password, since nobody is there to type one.
-- **Branch protection on `master`** requiring CI's *Typecheck, lint, test, build*
-  and *Golden fixture drift* checks. The publish workflow re-runs the first of
-  those itself, but protection is what stops an unreviewed commit reaching
-  `master` — and therefore npm — at all.
+Nothing else is required. The workflow gates itself — typecheck, lint, the test
+suite and the build all run before `npm publish`, so a broken commit on `master`
+fails the job rather than shipping.
+
+**Branch protection on `master` is worth having anyway**, requiring CI's
+*Typecheck, lint, test, build* and *Golden fixture drift* checks. Not because the
+publish depends on it, but for two narrower reasons:
+
+- *Golden fixture drift* is the one check the publish job does not repeat.
+  `npm test` compares this implementation against the **committed** fixtures;
+  that job compares the committed fixtures against freshly generated Python
+  output. A change that edited the port and regenerated the fixtures together
+  would agree with itself and pass `npm test`, and only the Python check would
+  notice.
+- Without protection, push access is publish access: a direct push to `master`
+  carrying a version bump goes to npm with no pull request and no review.
 
 To rehearse without shipping anything, run the workflow manually from the Actions
 tab with **dry run** ticked. It does every check and prints the tarball contents,
