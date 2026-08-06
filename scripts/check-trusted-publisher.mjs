@@ -176,18 +176,23 @@ const INTERPRETATIONS = {
     'The registry recognised this workflow and refused it anyway. If an ' +
     'Environment is configured on npmjs.com, this job has to declare the same ' +
     'one; `environment` above is what this job actually presents.',
-  404: ({ pkg, repository, workflow }) =>
+  404: ({ pkg, owner, repo, workflow }) =>
     'This does not mean the package is missing — it can be published and public ' +
     'and still produce a 404 here. What the registry could not find is a ' +
-    'trusted-publisher configuration matching this package and this workflow. On\n' +
+    'trusted-publisher configuration matching this package and this workflow. ' +
+    `Open the package's Settings tab —\n` +
     `  https://www.npmjs.com/package/${pkg}/access\n` +
-    'the Trusted Publisher fields have to be exactly:\n' +
-    `  Repository:  ${repository}\n` +
-    `  Workflow:    ${workflow}   (the filename only, case-sensitive)\n` +
-    '  Environment: (leave empty)\n' +
-    'And on that package. A configuration attached to a similarly named one — ' +
-    'unscoped, or a leftover from a first publish — looks precisely like this ' +
-    'from out here.',
+    "— find 'Trusted Publisher', choose GitHub Actions, and fill it in as:\n" +
+    `  Organization or user:  ${owner}\n` +
+    `  Repository name:       ${repo}\n` +
+    `  Workflow filename:     ${workflow}\n` +
+    '  Environment name:      (leave empty)\n' +
+    "  Allowed actions:       must include 'npm publish'\n" +
+    'Owner and repository are two separate fields, so a single `owner/repo` in ' +
+    'the second one never matches. Everything is case-sensitive, the workflow is ' +
+    'a bare filename rather than a path, and a package can hold only one ' +
+    'configuration at a time — so if this looks already set, it is set to ' +
+    'something other than the above.',
 };
 
 const result = await exchange(idToken, name);
@@ -209,7 +214,11 @@ if (interpretation) {
   console.log(
     `\n${interpretation({
       pkg: name,
-      repository: claims?.repository ?? '(see the claims above)',
+      /* npmjs.com asks for the owner and the repository separately, so split
+       * the claim rather than printing it whole — pasted into one field, an
+       * `owner/repo` never matches anything. */
+      owner: claims?.repository?.split('/')[0] ?? '(see the claims above)',
+      repo: claims?.repository?.split('/')[1] ?? '(see the claims above)',
       /* `owner/repo/.github/workflows/publish.yml@refs/heads/x` — npm wants the
        * basename, and this is the only place it can be read from. */
       workflow: claims?.job_workflow_ref?.split('@')[0]?.split('/').pop() ?? 'publish.yml',

@@ -382,10 +382,23 @@ One registry message needs translating, and the script prints the translation:
 is missing.** It can be published, public and installable and still produce that.
 The exchange endpoint is looking up the package's *trusted-publisher
 configuration*, and a 404 is it saying there is no configuration matching this
-package, this repository and this workflow — most often because the repository or
-the workflow filename on npmjs.com does not match character for character, or
-because the configuration was attached to a different package than the one being
-published.
+package, this repository and this workflow.
+
+That configuration lives on the package's **Settings** tab on npmjs.com, under
+*Trusted Publisher*, and for this repository it reads:
+
+| Field | Value |
+|---|---|
+| Organization or user | `vrwarp` |
+| Repository name | `brother_ql` |
+| Workflow filename | `publish.yml` |
+| Environment name | *(empty)* |
+| Allowed actions | must include `npm publish` |
+
+Owner and repository are **two separate fields**, so an `owner/repo` pasted into
+the second one matches nothing. Every field is case-sensitive, the workflow is a
+bare filename rather than a path, and a package holds only one configuration at a
+time — so a form that looks already filled in is filled in with something else.
 
 The workflow also gates itself — typecheck, lint, the test suite and the build all
 run before `npm publish`, so a broken commit on `master` fails the job rather than
