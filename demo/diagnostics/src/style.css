@@ -1,0 +1,231 @@
+/* Diagnostics wizard styles, on top of the shared demo tokens. */
+
+.diag-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+
+.diag-header h1 {
+  margin: 0;
+  font-size: 24px;
+}
+
+.diag-header .spacer {
+  flex: 1;
+}
+
+.pill {
+  display: inline-block;
+  border-radius: 999px;
+  padding: 2px 10px;
+  font-size: 13px;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  background: var(--panel);
+}
+
+.pill.ok {
+  color: var(--ok);
+  background: var(--ok-bg);
+  border-color: var(--ok);
+}
+
+.pill.bad {
+  color: var(--danger);
+  background: var(--danger-bg);
+  border-color: var(--danger);
+}
+
+.banner {
+  border: 1px solid var(--warn-border);
+  background: var(--warn-bg);
+  border-radius: 10px;
+  padding: 12px 16px;
+  margin: 12px 0;
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.phase-title {
+  margin: 28px 0 8px;
+  font-size: 14px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+
+.step {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  margin-bottom: 10px;
+  overflow: hidden;
+}
+
+.step > summary {
+  list-style: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+}
+
+.step > summary::-webkit-details-marker {
+  display: none;
+}
+
+.step .badge {
+  flex: none;
+  width: 92px;
+  text-align: center;
+  border-radius: 6px;
+  font-size: 12px;
+  padding: 2px 0;
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+
+.badge.passed { color: var(--ok); background: var(--ok-bg); border-color: var(--ok); }
+.badge.failed { color: var(--danger); background: var(--danger-bg); border-color: var(--danger); }
+.badge.running { color: var(--accent); border-color: var(--accent); }
+.badge.skipped, .badge.not-applicable { opacity: 0.7; }
+
+.step .title {
+  font-weight: 600;
+}
+
+.step .tape {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.step .body {
+  border-top: 1px solid var(--border);
+  padding: 14px 16px 16px;
+}
+
+.step .body ol, .step .body p {
+  margin: 6px 0;
+}
+
+.step .controls {
+  display: flex;
+  gap: 8px;
+  margin: 12px 0 4px;
+  flex-wrap: wrap;
+}
+
+button {
+  font: inherit;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text);
+  padding: 7px 14px;
+  cursor: pointer;
+}
+
+button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-text);
+  font-weight: 600;
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.steplog {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  padding: 8px 10px;
+  margin-top: 10px;
+  max-height: 180px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.steplog:empty {
+  display: none;
+}
+
+.interact {
+  border: 1px dashed var(--accent);
+  border-radius: 8px;
+  padding: 12px;
+  margin-top: 10px;
+}
+
+.interact .fields label {
+  display: block;
+  margin: 8px 0 2px;
+  font-weight: 600;
+}
+
+.interact .fields .choice {
+  display: block;
+  font-weight: 400;
+  margin: 2px 0;
+}
+
+.interact input[type='text'], .notes textarea {
+  width: 100%;
+  font: inherit;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px 10px;
+}
+
+.result {
+  margin-top: 10px;
+  font-size: 13px;
+}
+
+.result .error {
+  color: var(--danger);
+  background: var(--danger-bg);
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+
+.notes textarea {
+  min-height: 90px;
+  resize: vertical;
+}
+
+.finish {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 16px;
+  margin-top: 24px;
+}
+
+.finish h2 {
+  margin: 0 0 8px;
+}
+
+.checkline {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  margin: 10px 0;
+}
+
+.small {
+  font-size: 13px;
+  color: var(--muted);
+}

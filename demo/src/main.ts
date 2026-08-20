@@ -90,7 +90,8 @@ app.innerHTML = `
   <h1>Brother QL WebUSB demo</h1>
   <p>
     Print to a Brother QL label printer straight from this page &mdash; no driver, no
-    spooler. <a href="https://github.com/vrwarp/brother_ql">Source and documentation</a>.
+    spooler. <a href="https://github.com/vrwarp/brother_ql">Source and documentation</a>
+    &middot; <a href="diagnostics/">hardware diagnostics</a>.
   </p>
 </header>
 

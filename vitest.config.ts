@@ -10,6 +10,16 @@ export default defineConfig({
   // The suite imports src/ directly rather than the build output, so it needs the
   // same substitution tsup does — see the note in tsup.config.ts.
   define: { __PKG_VERSION__: JSON.stringify(version) },
+  resolve: {
+    alias: {
+      // The diagnostics app under demo/ imports the library by its package
+      // name, as a consumer would. Resolve that to the source, exactly as the
+      // demo's own vite config and the tsconfig paths do — otherwise tests
+      // that exercise those modules would run against a stale dist/ build,
+      // and instanceof checks would straddle two copies of every class.
+      '@vrwarp/brother-ql-webusb': new URL('./src/index.ts', import.meta.url).pathname,
+    },
+  },
   test: {
     // The core library is DOM-free by design; running the suite in the node
     // environment proves that no module reaches for `window`/`navigator` at

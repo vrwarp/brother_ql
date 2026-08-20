@@ -33,6 +33,23 @@ export default tseslint.config(
     },
   },
   {
+    // The diagnostics smoke test drives a real browser: its page.evaluate /
+    // waitForFunction callbacks are parsed here as Node code but execute in
+    // the page, where the DOM globals do exist.
+    files: ['scripts/smoke-diagnostics.mjs'],
+    languageOptions: {
+      globals: {
+        document: 'readonly',
+        navigator: 'readonly',
+        window: 'readonly',
+        DOMException: 'readonly',
+        DataView: 'readonly',
+        Uint8Array: 'readonly',
+        setTimeout: 'readonly',
+      },
+    },
+  },
+  {
     // The published library targets the browser. Node built-ins are available
     // to the tests and to build tooling, but must never reach src/.
     files: ['src/**/*.ts'],

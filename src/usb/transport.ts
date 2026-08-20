@@ -401,6 +401,7 @@ export class UsbTransport extends TypedEventTarget<TransportEvents> {
       betweenChunks?.();
 
       const chunk = data.subarray(sent, Math.min(sent + this.#chunkSize, data.length));
+      const chunkStarted = Date.now();
       let result = await this.#writeChunk(endpoint.endpointNumber, chunk, sent, data.length);
 
       if (result.status === 'stall') {
@@ -436,6 +437,12 @@ export class UsbTransport extends TypedEventTarget<TransportEvents> {
       if (written < chunk.length) {
         this.#diag?.event('transport', 'short-write', { expected: chunk.length, written });
       }
+
+      this.#diag?.event('transport', 'write-chunk', {
+        at: sent,
+        size: Math.min(written, chunk.length),
+        ms: Date.now() - chunkStarted,
+      });
 
       sent += Math.min(written, chunk.length);
       onProgress?.(sent, data.length);
