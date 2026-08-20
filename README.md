@@ -491,6 +491,47 @@ label on a roll works, on a real printer, which is the claim the golden fixtures
 could never make on their own — they prove the bytes match the reference
 implementation, not that a printer likes them.
 
+### The diagnostics page
+
+If you have any Brother QL or P-touch printer, the guided diagnostics page —
+deployed next to the demo at `<pages-url>/diagnostics/` — is how hardware
+claims get made. It walks you through a checklist with step-by-step
+instructions: capturing the USB descriptor tree, identifying the model,
+surveying whatever media you own against what the printer reports, printing
+deterministic test cards (whose asymmetric fiducials make any mirroring or
+rotation bug visible on paper), and optionally provoking faults — cover open,
+mid-print unplug — to record how this printer fails and recovers.
+
+The wizard assumes the operator is careless, because operators are: it
+verifies every claim it can against the printer's own status before acting.
+Declaring the wrong roll (or swapping it after declaring) is caught and
+corrected from what the printer reports; printing with no media or an
+unresolved error prompts a fix-and-recheck loop; media that cannot belong to
+the declared model flags the model as probably wrong; "the cover is open" is
+checked before a fault test; the media survey notices when the roll was not
+actually swapped; steps run out of order park with the reason and unblock
+themselves once their prerequisite passes; and downloading early warns about
+unrun core steps and unanswered observation forms, recording those gaps in
+the bundle's manifest.
+
+Every step is wrapped so a failure is *recorded* rather than fatal: the wizard
+carries on to the next item, the session persists across reloads and crashes,
+and the result is downloadable at any point as **one ZIP bundle** containing
+the environment, the descriptor snapshot, every raw status packet, per-call
+USB timing, the exact bytes of every job sent (`jobs/*.bin`, reproducible by a
+test later because the test cards are painted deterministically), and your own
+observations. The USB serial number is included only as a truncated hash
+unless you opt in. Attach the bundle to a
+[GitHub issue](https://github.com/vrwarp/brother_ql/issues) — a bundle from a
+printer that misbehaved is worth even more than one from a printer that
+worked.
+
+The wizard's engine (ZIP writer, session persistence, resilient step runner,
+raw-USB recording proxy, test card painter, bundle assembler) is unit-tested
+in `test/diagnostics-app.test.ts`, and `scripts/smoke-diagnostics.mjs` drives
+the built page in a real browser — once with the chooser dismissed, once
+against a scripted fake WebUSB printer end to end.
+
 Everything below is still open. Each row is a claim somebody has to make on
 hardware once, and a ticked box means it has been seen to work at least once —
 not that it is covered by a test, because none of it can be:

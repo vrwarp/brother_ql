@@ -56,6 +56,32 @@ Changes to the Python package are not tracked here.
   recovery, mid-job unplugs and reconnects on the same object.
 - **Benchmarks** (`npm run bench`) for the hot paths, and complexity-guard tests
   with ceilings a Raspberry Pi passes easily but an accidental O(n²) cannot.
+- **Hardware diagnostics page** at `/diagnostics/` on the deployed demo site: a
+  guided, step-by-step wizard that captures everything needed to validate the
+  library against a real printer — environment, USB descriptor tree, model
+  identification, a media survey against the label table, deterministic test
+  card prints (plain, multi-page, compressed, 600 dpi, black/red), and induced
+  faults (cover open, unplug while idle and mid-print). Every step is
+  failure-isolated: errors are recorded and the wizard continues; the session
+  persists across reloads; and at any point the collected data downloads as a
+  single ZIP bundle (dependency-free writer, DEFLATE via `CompressionStream`)
+  holding raw traces, per-call USB timing, exact job bytes and the operator's
+  observations, with the serial number hashed unless explicitly included. The
+  library gains a per-chunk `write-chunk` trace event; the wizard's engine is
+  unit-tested and `scripts/smoke-diagnostics.mjs` drives the built page in a
+  real browser against both a dismissed chooser and a scripted fake printer.
+  The wizard does not take the operator's word for anything it can check:
+  before every print it queries the printer and arbitrates — wrong or stale
+  media declarations are caught and corrected from the printer's own report,
+  no-media and unresolved-error states prompt with a re-check loop, media that
+  cannot belong to the declared model flags a likely wrong model, "the cover
+  is open" is verified before a fault test (and its absence questioned), the
+  media survey notices an unswapped roll, replug claims retry with guidance
+  instead of failing, steps blocked on prerequisites unblock themselves once
+  the prerequisite passes, a resumed session attached to a different printer
+  warns about mixing devices, and the download gate lists unrun core steps and
+  unanswered observation forms — recording those gaps inside the bundle's
+  manifest so "found nothing" and "never ran" stay distinguishable.
 
 ### Fixed
 
