@@ -85,6 +85,35 @@ Changes to the Python package are not tracked here.
 - Concurrent `open()`/`close()` on the transport no longer race; reopening after
   an unplug tears the half-open device down first.
 
+Sweeping each of those bugs' *classes* across the whole surface found and fixed
+their siblings (`test/class-sweep.test.ts` documents the classes):
+
+- `threshold: NaN` used to print an **all-black label** — every pixel compares
+  `< NaN`, which is false, which is full ink. `computeThreshold` now rejects
+  NaN (Python's `int(nan)` raises too); finite out-of-range values still clamp
+  exactly as upstream. Same class: a non-finite `pageCount` burned the whole
+  idle timeout, degenerate `chunkSize`/`writeChunkTimeoutMs` values could spin
+  or instantly trip the write loop, and a NaN recorder capacity threw an opaque
+  "invalid array length" — all validated now.
+- A `selectConfiguration` failure was the one step of `open()` whose rejection
+  escaped as a raw DOMException instead of an `InterfaceClaimError` with
+  platform advice.
+- `close()` called while `open()` was still in flight returned immediately and
+  let the open go on to claim the interface; the two are now serialised in both
+  directions, concurrent opens join instead of double-claiming, and a *failed*
+  open no longer keeps the OS device handle (which blocked other applications
+  until the page went away).
+- More `undefined`-coerced-into-data reads: `getBit` reported "no dot" for
+  out-of-range coordinates, `packMirroredPlane` fabricated *printed* dots from
+  a short plane (`undefined !== 0`), and `rotateRawImage`, `halveWidth` and
+  `pasteImage` produced silent zero-filled garbage from images whose buffer
+  disagreed with their dimensions. All reject with a `RangeError` naming the
+  mismatch.
+- `addCutEvery` accepted fractions and NaN that Python's bitwise-and would
+  reject (integers still mask to a byte, exactly as upstream).
+- The 2-second cap timer in `close()` outlived the close when the reader ended
+  promptly, keeping the event loop alive for test runners and embedders.
+
 ### Performance
 
 - The PackBits coder writes into preallocated buffers instead of growing a

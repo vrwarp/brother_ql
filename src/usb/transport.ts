@@ -124,6 +124,7 @@ export class UsbTransport extends TypedEventTarget<TransportEvents> {
   #endpointOut: USBEndpoint | null = null;
   #partial = new Uint8Array(0);
   #readerDone: Promise<void> | null = null;
+  #openPromise: Promise<void> | null = null;
   #closePromise: Promise<void> | null = null;
 
   constructor(device: MinimalUsbDevice, options: TransportOptions = {}) {
@@ -132,6 +133,18 @@ export class UsbTransport extends TypedEventTarget<TransportEvents> {
     this.#chunkSize = options.chunkSize ?? 16 * 1024;
     this.#writeChunkTimeoutMs = options.writeChunkTimeoutMs ?? 30_000;
     this.#diag = options.diagnostics;
+    // A degenerate chunk size would slice zero-length transfers and spin the
+    // write loop; a non-finite timeout would fire the watchdog instantly (or
+    // never). Both are programmer errors — reject them at construction, where
+    // the mistake is written, not mid-job.
+    if (!Number.isInteger(this.#chunkSize) || this.#chunkSize < 1) {
+      throw new RangeError(`chunkSize must be a positive integer, got ${this.#chunkSize}.`);
+    }
+    if (!Number.isFinite(this.#writeChunkTimeoutMs) || this.#writeChunkTimeoutMs <= 0) {
+      throw new RangeError(
+        `writeChunkTimeoutMs must be a positive number, got ${this.#writeChunkTimeoutMs}.`,
+      );
+    }
   }
 
   get opened(): boolean {
@@ -145,6 +158,8 @@ export class UsbTransport extends TypedEventTarget<TransportEvents> {
   /** Open the device, claim the printer interface and start reading. */
   async open(): Promise<void> {
     if (this.#state === 'open') return;
+    // A second concurrent open joins the first rather than racing it.
+    if (this.#openPromise) return this.#openPromise;
     // Someone closing this transport concurrently finishes first, so the two
     // never interleave on the device.
     if (this.#closePromise) await this.#closePromise;
@@ -153,6 +168,27 @@ export class UsbTransport extends TypedEventTarget<TransportEvents> {
     // reopening starts from a known state.
     if (this.#state === 'dead') await this.close();
 
+    this.#openPromise = this.#doOpen();
+    try {
+      await this.#openPromise;
+    } finally {
+      this.#openPromise = null;
+    }
+  }
+
+  async #doOpen(): Promise<void> {
+    try {
+      await this.#openSteps();
+    } catch (error) {
+      // A failed open must not keep the OS handle: leaving the device open
+      // after a claim failure blocks other applications until the page goes
+      // away, and a retry works either way.
+      await this.device.close().catch(() => {});
+      throw error;
+    }
+  }
+
+  async #openSteps(): Promise<void> {
     this.statusQueue.reset();
     this.#partial = new Uint8Array(0);
 
@@ -175,7 +211,23 @@ export class UsbTransport extends TypedEventTarget<TransportEvents> {
 
     if (this.device.configuration === null) {
       const first = this.device.configurations[0];
-      await this.device.selectConfiguration(first?.configurationValue ?? 1);
+      try {
+        await this.device.selectConfiguration(first?.configurationValue ?? 1);
+      } catch (error) {
+        // Same taxonomy as the other open() steps: everything between "user
+        // picked a device" and "interface claimed" is a claim failure with
+        // platform advice, never a bare DOMException.
+        const platform = detectPlatform();
+        this.#diag?.event('transport', 'open-failed', {
+          step: 'select-configuration',
+          error: String(error),
+        });
+        throw new InterfaceClaimError(
+          `Could not select the printer's USB configuration. ${claimAdvice(platform)}`,
+          platform,
+          error,
+        );
+      }
     }
 
     const target = this.#findPrinterInterface();
@@ -429,6 +481,9 @@ export class UsbTransport extends TypedEventTarget<TransportEvents> {
 
   /** Release the interface and close the device. */
   async close(): Promise<void> {
+    // An open still in flight finishes (or fails) first, so a close cannot
+    // observe "closed" while the open goes on to claim the interface anyway.
+    if (this.#openPromise) await this.#openPromise.catch(() => {});
     if (this.#state === 'closed') return;
     // A second concurrent close joins the first instead of double-releasing.
     if (this.#closePromise) return this.#closePromise;
@@ -455,11 +510,16 @@ export class UsbTransport extends TypedEventTarget<TransportEvents> {
 
     if (this.#readerDone) {
       // Closing rejects the parked transfer, which ends the reader. Cap the
-      // wait anyway so a misbehaving device cannot hang the caller.
+      // wait anyway so a misbehaving device cannot hang the caller — and
+      // clear the cap afterwards so the timer does not outlive the close.
+      let cap: ReturnType<typeof setTimeout> | undefined;
       await Promise.race([
         this.#readerDone.catch(() => {}),
-        new Promise<void>((resolve) => setTimeout(resolve, 2000)),
+        new Promise<void>((resolve) => {
+          cap = setTimeout(resolve, 2000);
+        }),
       ]);
+      if (cap !== undefined) clearTimeout(cap);
       this.#readerDone = null;
     }
 

@@ -102,7 +102,9 @@ export class DiagnosticsRecorder implements Tracer {
   #seq = 0;
 
   constructor(options: DiagnosticsRecorderOptions = {}) {
-    this.#capacity = Math.max(1, Math.floor(options.capacity ?? 512));
+    const capacity = options.capacity ?? 512;
+    // A NaN capacity would surface as an opaque "invalid array length" below.
+    this.#capacity = Number.isFinite(capacity) ? Math.max(1, Math.floor(capacity)) : 512;
     this.#sink = options.sink;
     this.#now = options.now ?? defaultNow();
     this.#buffer = new Array<TraceEvent | undefined>(this.#capacity);

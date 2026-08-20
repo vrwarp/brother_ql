@@ -43,6 +43,8 @@ export interface MockUsbDeviceOptions {
   claimError?: Error;
   /** Rejection thrown by `open`. */
   openError?: Error;
+  /** Rejection thrown by `selectConfiguration`. */
+  selectConfigurationError?: Error;
   /** Called after each `transferOut`; may push more read entries. */
   onWrite?: (chunk: Uint8Array, device: MockUsbDevice) => void;
   /** Make `transferOut` hang, to exercise the write watchdog. */
@@ -180,6 +182,7 @@ export class MockUsbDevice implements MinimalUsbDevice {
   }
 
   async selectConfiguration(configurationValue: number): Promise<void> {
+    if (this.#options.selectConfigurationError) throw this.#options.selectConfigurationError;
     const found = this.#configurations.find((c) => c.configurationValue === configurationValue);
     this.#configuration = found ?? this.#configurations[0] ?? null;
   }

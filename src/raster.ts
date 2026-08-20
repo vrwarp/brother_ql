@@ -178,11 +178,20 @@ export class BrotherQLRaster {
     this.#data.push(0x1b, 0x69, 0x4d, (autocut ? 1 : 0) << 6);
   }
 
-  /** `ESC i A` — cut after every n-th page. */
+  /**
+   * `ESC i A` — cut after every n-th page.
+   *
+   * An integer is masked to its low byte, exactly as the Python
+   * implementation's `n & 0xFF` does; a non-integer is rejected, as Python's
+   * bitwise-and would reject it too.
+   */
   addCutEvery(n = 1): void {
     if (!this.model.cutting) {
       this.#unsupported("Trying to call addCutEvery with a printer that doesn't support it");
       return;
+    }
+    if (!Number.isInteger(n)) {
+      throw new RasterError(`Cut-every count must be an integer, got ${n}.`);
     }
     this.#data.push(0x1b, 0x69, 0x41, n & 0xff);
   }

@@ -8,9 +8,15 @@
  * Mirrors `conversion.py`:
  * `t = 100 - percent; t = min(255, max(0, int(t / 100 * 255)))`.
  * Python's `int()` truncates towards zero, which is what `Math.trunc` does.
- * The default of 70 % yields 76.
+ * The default of 70 % yields 76. Out-of-range percentages clamp, exactly as
+ * upstream; a NaN is rejected, because it would poison every comparison
+ * downstream — `pixel < NaN` is always false, which prints an all-black
+ * label. (Python's `int(nan)` raises too.)
  */
 export function computeThreshold(percent: number): number {
+  if (Number.isNaN(percent)) {
+    throw new RangeError('The threshold percentage must be a number, got NaN.');
+  }
   const inverted = 100.0 - percent;
   return Math.min(255, Math.max(0, Math.trunc((inverted / 100.0) * 255)));
 }

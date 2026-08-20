@@ -432,7 +432,13 @@ export class BrotherQLPrinterCore extends TypedEventTarget<PrinterEvents> {
   async sendRaw(instructions: Uint8Array, options: SendRawOptions = {}): Promise<PrintResult> {
     this.acquire();
     try {
-      const pageCount = options.pageCount ?? 1;
+      // A non-finite page count would make the completion condition
+      // unsatisfiable and burn the whole idle timeout; treat it like the
+      // default, the same way print() treats a non-finite copies count.
+      const requestedPages = options.pageCount ?? 1;
+      const pageCount = Number.isFinite(requestedPages)
+        ? Math.max(0, Math.floor(requestedPages))
+        : 1;
       const idleMs = options.statusTimeoutMs ?? 10_000;
       this.transport.statusQueue.clear();
 
