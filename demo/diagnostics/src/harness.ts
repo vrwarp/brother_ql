@@ -24,12 +24,20 @@ import {
   type Model,
 } from '@vrwarp/brother-ql-webusb';
 
+import {
+  collectDeviceIdentity,
+  snapshotDescriptors,
+  type DeviceIdentitySnapshot,
+} from './collect.js';
 import type { DiagnosticSession } from './session.js';
 import { RecordingUsbDevice, type UsbLogRecord } from './usb-recording.js';
 
 export class NoDeviceError extends Error {
   constructor() {
-    super('No printer is connected. Run the "Select your printer" step first.');
+    super(
+      'No printer is connected, and the browser will only show its device ' +
+        'chooser directly after a click — press Run again to pick the printer.',
+    );
     this.name = 'NoDeviceError';
   }
 }
@@ -85,8 +93,38 @@ export class Harness {
     }
   }
 
+  /**
+   * True when the attached printer's USB identity differs from the one this
+   * session started with — the careless case of resuming yesterday's session
+   * with today's different printer, which would silently mix two devices'
+   * data into one bundle.
+   */
+  deviceMismatch = false;
+
   /** Wrap and adopt a freshly chosen or re-discovered device. */
   attachDevice(device: USBDevice): BrotherQLPrinter {
+    // Detect a swap before overwriting the stored identity.
+    const priorVendor = this.session.getDeclared('vendorId');
+    const priorProduct = this.session.getDeclared('productId');
+    const priorSerialNote = this.session.getDeclared('serialNote');
+    const serialNote = device.serialNumber ? `sn:${device.serialNumber.length}` : 'sn:none';
+    if (
+      (priorVendor !== undefined && priorVendor !== String(device.vendorId)) ||
+      (priorProduct !== undefined && priorProduct !== String(device.productId)) ||
+      (priorSerialNote !== undefined && priorSerialNote !== serialNote)
+    ) {
+      this.deviceMismatch = true;
+      this.recorder.event('diagnostics', 'device-changed', {
+        from: `${priorVendor}:${priorProduct}`,
+        to: `${device.vendorId}:${device.productId}`,
+      });
+      this.session.setSnapshot('deviceChanged', {
+        detectedAt: new Date().toISOString(),
+        from: { vendorId: priorVendor, productId: priorProduct },
+        to: { vendorId: String(device.vendorId), productId: String(device.productId) },
+      });
+    }
+
     this.#rawDevice = device;
     const recording = new RecordingUsbDevice(device, this.usbLog);
     const model = this.declaredModel();
@@ -97,8 +135,26 @@ export class Harness {
     this.#printer.on('disconnect', () => this.#onConnectionChange?.());
     this.session.setDeclared('vendorId', String(device.vendorId));
     this.session.setDeclared('productId', String(device.productId));
+    this.session.setDeclared('serialNote', serialNote);
+    // Snapshots happen on *every* attach, not only in the guided selection
+    // step — a user who reaches the device through a later step's self-heal
+    // still gets identity and descriptors into the bundle.
+    void this.captureDeviceSnapshots().catch(() => {});
     this.#onConnectionChange?.();
     return this.#printer;
+  }
+
+  /** Store the identity and descriptor snapshots for the current device. */
+  async captureDeviceSnapshots(): Promise<DeviceIdentitySnapshot | null> {
+    const device = this.#rawDevice;
+    if (!device) return null;
+    const identity = await collectDeviceIdentity(device, this.session.meta.includeSerial);
+    this.session.setSnapshot('deviceIdentity', identity);
+    this.session.setSnapshot(
+      device.opened ? 'descriptorsPostOpen' : 'descriptorsPreOpen',
+      snapshotDescriptors(device),
+    );
+    return identity;
   }
 
   setModel(modelId: string): void {
@@ -149,17 +205,20 @@ export class Harness {
       return printer;
     }
 
-    if (this.#rawDevice === null && wantVendor === undefined) {
-      // Never had a device: the selection step has to run first.
-      throw new NoDeviceError();
+    // Last resort — including the careless path of skipping the selection
+    // step entirely: the chooser. It works whenever the call is still riding
+    // the user's click on Run; if the browser refuses for lack of a gesture,
+    // the error tells the user exactly what to press.
+    try {
+      const printer = await this.requestDevice();
+      await printer.open();
+      return printer;
+    } catch (error) {
+      if (error instanceof DOMException && error.name === 'SecurityError') {
+        throw new NoDeviceError();
+      }
+      throw error;
     }
-
-    // Last resort: the chooser. Works when the call is still riding the
-    // user's click on Run; otherwise the browser refuses and the error tells
-    // the user to click again.
-    const printer = await this.requestDevice();
-    await printer.open();
-    return printer;
   }
 
   /** Best-effort cleanup between steps after a failure. Never throws. */

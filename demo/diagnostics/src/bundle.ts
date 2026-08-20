@@ -86,6 +86,11 @@ export function buildBundleFiles(
       statusCounts: statusCounts(steps),
       usbSummary: summarizeUsbLog(usbLog),
       traceEventCount: traceEvents.length,
+      // What was knowingly left incomplete at download time, so a reader can
+      // tell "this step found nothing" apart from "this step never ran".
+      readiness: session.getSnapshot('readinessAtDownload') ?? null,
+      // Present when the session saw more than one physical printer.
+      deviceChanged: session.getSnapshot('deviceChanged') ?? null,
     }),
   });
 

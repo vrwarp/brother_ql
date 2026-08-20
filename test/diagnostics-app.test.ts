@@ -17,13 +17,25 @@ import { DiagnosticsRecorder } from '../src/diagnostics.js';
 import { BrotherQLPrinter } from '../src/printer.js';
 import { UsbTransport } from '../src/usb/transport.js';
 
+import { getLabel, getModel } from '../src/index.js';
+import { parseStatus } from '../src/status.js';
+
 import { buildBundleFiles } from '../demo/diagnostics/src/bundle.js';
 import { collectDeviceIdentity, snapshotDescriptors } from '../demo/diagnostics/src/collect.js';
+import { Harness } from '../demo/diagnostics/src/harness.js';
 import {
+  bundleReadiness,
   executeStep,
+  observationsPending,
+  refreshApplicability,
   StepAbortedError,
   type StepDefinition,
 } from '../demo/diagnostics/src/runner.js';
+import {
+  assessMediaStatus,
+  describeReportedMedia,
+  sameMediaReported,
+} from '../demo/diagnostics/src/verify.js';
 import {
   bytesToBase64,
   base64ToBytes,
@@ -34,6 +46,7 @@ import { paintTestCard } from '../demo/diagnostics/src/testcard.js';
 import { RecordingUsbDevice, summarizeUsbLog } from '../demo/diagnostics/src/usb-recording.js';
 import { crc32, createZip } from '../demo/diagnostics/src/zip.js';
 import {
+  makeStatusPacket,
   MockUsbDevice,
   STATUS_COMPLETED,
   STATUS_PHASE_PRINTING,
@@ -330,6 +343,212 @@ describe('step runner resilience', () => {
       }),
     );
     expect(record.status).toBe('skipped');
+  });
+});
+
+describe('verifying human claims against the printer', () => {
+  const model = getModel('QL-820NWB');
+  const status = (overrides: Parameters<typeof makeStatusPacket>[0]) =>
+    parseStatus(makeStatusPacket(overrides));
+
+  it('accepts a declaration the printer agrees with', () => {
+    const verdict = assessMediaStatus(getLabel('62'), model, status({ mediaWidthMm: 62 }));
+    expect(verdict).toEqual({ kind: 'ok' });
+  });
+
+  it('flags a declared label the printer contradicts, naming what is loaded', () => {
+    const verdict = assessMediaStatus(getLabel('62'), model, status({ mediaWidthMm: 29 }));
+    expect(verdict.kind).toBe('mismatch');
+    if (verdict.kind === 'mismatch') {
+      expect(verdict.suggested.map((label) => label.identifier)).toEqual(['29']);
+    }
+  });
+
+  it('catches the swapped-after-declaring case for die-cut media too', () => {
+    const verdict = assessMediaStatus(
+      getLabel('62x29'),
+      model,
+      status({ mediaWidthMm: 62, mediaLengthMm: 100, mediaTypeCode: 0x0b }),
+    );
+    expect(verdict.kind).toBe('mismatch');
+    if (verdict.kind === 'mismatch') {
+      expect(verdict.suggested.map((label) => label.identifier)).toEqual(['62x100']);
+    }
+  });
+
+  it('reports no media before a print is attempted at an empty printer', () => {
+    expect(
+      assessMediaStatus(getLabel('62'), model, status({ mediaWidthMm: 0, mediaTypeCode: 0 })),
+    ).toEqual({ kind: 'no-media' });
+  });
+
+  it('surfaces printer errors ahead of everything else', () => {
+    const verdict = assessMediaStatus(
+      getLabel('62'),
+      model,
+      status({ mediaWidthMm: 62, errorInfo2: 0x10 }),
+    );
+    expect(verdict.kind).toBe('printer-error');
+    if (verdict.kind === 'printer-error') {
+      expect(verdict.messages.join()).toContain('Cover opened');
+    }
+  });
+
+  it('reads media-that-cannot-belong-to-this-model as a wrong-model signal', () => {
+    // 102 mm media only exists for the wide models; on a declared QL-700 the
+    // declaration of the *model* is the likely mistake.
+    const verdict = assessMediaStatus(
+      getLabel('62'),
+      getModel('QL-700'),
+      status({ mediaWidthMm: 102 }),
+    );
+    expect(verdict.kind).toBe('model-conflict');
+    if (verdict.kind === 'model-conflict') {
+      expect(verdict.wouldMatch.map((label) => label.identifier)).toContain('102');
+    }
+  });
+
+  it('reports media no table entry recognises without blocking', () => {
+    expect(assessMediaStatus(getLabel('62'), model, status({ mediaWidthMm: 63 })).kind).toBe(
+      'unknown-media',
+    );
+  });
+
+  it('declares P-touch media unverifiable rather than falsely mismatched', () => {
+    const verdict = assessMediaStatus(
+      getLabel('pt24'),
+      getModel('PT-P750W'),
+      status({ mediaWidthMm: 24 }),
+    );
+    expect(verdict.kind).toBe('unverifiable');
+  });
+
+  it('detects an unswapped roll between survey rounds', () => {
+    const first = status({ mediaWidthMm: 62 });
+    expect(sameMediaReported(first, status({ mediaWidthMm: 62 }))).toBe(true);
+    expect(sameMediaReported(first, status({ mediaWidthMm: 29 }))).toBe(false);
+    expect(
+      sameMediaReported(first, status({ mediaWidthMm: 62, mediaLengthMm: 29, mediaTypeCode: 0x0b })),
+    ).toBe(false);
+  });
+
+  it('describes reported media the way the prompts need it', () => {
+    expect(describeReportedMedia(status({ mediaWidthMm: 62 }))).toBe('62 mm continuous');
+    expect(
+      describeReportedMedia(status({ mediaWidthMm: 62, mediaLengthMm: 29, mediaTypeCode: 0x0b })),
+    ).toBe('62 mm × 29 mm die-cut');
+    expect(describeReportedMedia(status({ mediaWidthMm: 0, mediaTypeCode: 0 }))).toBe('no media');
+  });
+});
+
+describe('careless-path accountability', () => {
+  function definitionsFor(session: DiagnosticSession): StepDefinition[] {
+    return [
+      {
+        id: 'identify',
+        title: 'identify',
+        phase: 'setup',
+        instructions: '',
+        run: () => Promise.resolve(null),
+      },
+      {
+        id: 'print',
+        title: 'print',
+        phase: 'printing',
+        instructions: '',
+        observations: [{ id: 'printed', label: 'Printed?' }],
+        appliesTo: () => (session.getDeclared('modelId') ? true : 'Blocked until identify runs.'),
+        run: () => Promise.resolve(null),
+      },
+      {
+        id: 'extra',
+        title: 'extra',
+        phase: 'faults',
+        optional: true,
+        instructions: '',
+        run: () => Promise.resolve(null),
+      },
+    ];
+  }
+
+  const quiet = () => ({
+    log: () => {},
+    waitForUser: () => Promise.resolve(),
+    ask: () => Promise.resolve({}),
+  });
+
+  it('unblocks a step run out of order once its prerequisite is satisfied', async () => {
+    const session = DiagnosticSession.create(memoryStorage(), { app: '1', library: 'x' });
+    const definitions = definitionsFor(session);
+    const print = definitions[1] as StepDefinition;
+
+    // Careless order: print first — parked, not failed, with the reason.
+    const parked = await executeStep(print, session, quiet);
+    expect(parked.status).toBe('not-applicable');
+    expect(parked.notApplicableReason).toContain('Blocked');
+
+    // Nothing changes while the prerequisite is still missing.
+    expect(refreshApplicability(definitions, session)).toEqual([]);
+
+    // Identify runs; the parked step resets to pending automatically.
+    session.setDeclared('modelId', 'QL-820NWB');
+    expect(refreshApplicability(definitions, session)).toEqual(['print']);
+    expect(session.step('print').status).toBe('pending');
+
+    const rerun = await executeStep(print, session, quiet);
+    expect(rerun.status).toBe('passed');
+  });
+
+  it('tracks unanswered observation forms and unrun core steps for the download gate', async () => {
+    const session = DiagnosticSession.create(memoryStorage(), { app: '1', library: 'x' });
+    session.setDeclared('modelId', 'QL-820NWB');
+    const definitions = definitionsFor(session);
+    const [identify, print] = definitions as [StepDefinition, StepDefinition, StepDefinition];
+
+    let readiness = bundleReadiness(definitions, session);
+    expect(readiness.pendingRequired).toEqual(['identify', 'print']);
+    expect(readiness.missingObservations).toEqual([]);
+
+    await executeStep(identify, session, quiet);
+    await executeStep(print, session, quiet);
+    expect(observationsPending(print, session)).toBe(true);
+
+    readiness = bundleReadiness(definitions, session);
+    expect(readiness.pendingRequired).toEqual([]);
+    expect(readiness.missingObservations).toEqual(['print']);
+
+    session.updateStep('print', { observations: { printed: 'Yes' } });
+    expect(observationsPending(print, session)).toBe(false);
+    expect(bundleReadiness(definitions, session).missingObservations).toEqual([]);
+    // The optional fault step never counts against readiness.
+    expect(bundleReadiness(definitions, session).pendingRequired).toEqual([]);
+  });
+
+  it('notices when a resumed session is attached to a different printer', () => {
+    const storage = memoryStorage();
+    const session = DiagnosticSession.create(storage, { app: '1', library: 'x' });
+    const harness = new Harness(session);
+
+    harness.attachDevice(new MockUsbDevice({ productId: 0x209b }) as unknown as USBDevice);
+    expect(harness.deviceMismatch).toBe(false);
+
+    harness.attachDevice(new MockUsbDevice({ productId: 0x2100 }) as unknown as USBDevice);
+    expect(harness.deviceMismatch).toBe(true);
+    const changed = session.getSnapshot<{ to: { productId: string } }>('deviceChanged');
+    expect(changed?.to.productId).toBe(String(0x2100));
+  });
+
+  it('captures identity and descriptors on every attach, not only in the guided step', async () => {
+    const session = DiagnosticSession.create(memoryStorage(), { app: '1', library: 'x' });
+    const harness = new Harness(session);
+    harness.attachDevice(
+      new MockUsbDevice({ serialNumber: 'ABC' }) as unknown as USBDevice,
+    );
+    const identity = await harness.captureDeviceSnapshots();
+    expect(identity?.serialNumber).toBeNull(); // redacted by default
+    expect(identity?.serialHash).toMatch(/^[0-9a-f]{16}$/);
+    expect(session.getSnapshot('deviceIdentity')).toBeDefined();
+    expect(session.getSnapshot('descriptorsPreOpen')).toBeDefined();
   });
 });
 

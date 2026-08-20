@@ -70,6 +70,18 @@ Changes to the Python package are not tracked here.
   library gains a per-chunk `write-chunk` trace event; the wizard's engine is
   unit-tested and `scripts/smoke-diagnostics.mjs` drives the built page in a
   real browser against both a dismissed chooser and a scripted fake printer.
+  The wizard does not take the operator's word for anything it can check:
+  before every print it queries the printer and arbitrates — wrong or stale
+  media declarations are caught and corrected from the printer's own report,
+  no-media and unresolved-error states prompt with a re-check loop, media that
+  cannot belong to the declared model flags a likely wrong model, "the cover
+  is open" is verified before a fault test (and its absence questioned), the
+  media survey notices an unswapped roll, replug claims retry with guidance
+  instead of failing, steps blocked on prerequisites unblock themselves once
+  the prerequisite passes, a resumed session attached to a different printer
+  warns about mixing devices, and the download gate lists unrun core steps and
+  unanswered observation forms — recording those gaps inside the bundle's
+  manifest so "found nothing" and "never ran" stay distinguishable.
 
 ### Fixed
 

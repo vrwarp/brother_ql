@@ -13,7 +13,10 @@ import { isWebUsbSupported, VERSION } from '@vrwarp/brother-ql-webusb';
 import { buildBundle, bundleFileName } from './bundle.js';
 import { Harness } from './harness.js';
 import {
+  bundleReadiness,
   executeStep,
+  observationsPending,
+  refreshApplicability,
   skipStep,
   StepAbortedError,
   type ObservationField,
@@ -80,6 +83,7 @@ app.innerHTML = `
   </p>
   <div id="support-warning"></div>
   <div id="resume-banner"></div>
+  <div id="mismatch-banner"></div>
   <div id="steps"></div>
   <section class="finish">
     <h2>Finish: download the bundle</h2>
@@ -87,6 +91,7 @@ app.innerHTML = `
       Available at any time, even after failures — a partial bundle is far
       better than none.
     </p>
+    <div id="summary" class="small"></div>
     <label class="checkline">
       <input type="checkbox" id="include-serial" />
       <span>Include the printer's raw serial number
@@ -159,6 +164,7 @@ for (const definition of steps) {
     <summary>
       <span class="badge"></span>
       <span class="title">${escapeHtml(definition.title)}</span>
+      <span class="obs-chip pill" hidden>📝 observations pending</span>
       ${definition.tapeUse ? `<span class="tape">🏷 ${escapeHtml(definition.tapeUse)}</span>` : ''}
     </summary>
     <div class="body">
@@ -190,6 +196,10 @@ function renderCard(card: Card): void {
   card.badge.textContent = status;
   card.badge.className = `badge ${status}`;
 
+  const pendingObservations = observationsPending(card.definition, session);
+  const chip = card.root.querySelector('.obs-chip') as HTMLElement;
+  chip.hidden = !pendingObservations;
+
   card.controls.innerHTML = '';
   const runButton = document.createElement('button');
   runButton.className = 'primary';
@@ -198,6 +208,16 @@ function renderCard(card: Card): void {
   runButton.disabled = running !== null;
   runButton.addEventListener('click', () => void runStep(card));
   card.controls.append(runButton);
+
+  if (pendingObservations && running === null) {
+    const answer = document.createElement('button');
+    answer.textContent = 'Answer observations';
+    answer.addEventListener('click', () => {
+      card.root.open = true;
+      void collectObservations(card).then(() => renderAll());
+    });
+    card.controls.append(answer);
+  }
 
   if (running === card.definition.id) {
     const cancel = document.createElement('button');
@@ -249,6 +269,39 @@ function renderAll(): void {
     ? 'Warning: this browser is not persisting the session (storage unavailable or full). ' +
       'Keep this tab open and download the bundle before closing it.'
     : 'The session is saved locally after every step; reloading this page resumes it.';
+
+  const mismatch = document.querySelector('#mismatch-banner') as HTMLElement;
+  mismatch.innerHTML = harness.deviceMismatch
+    ? `<div class="banner"><b>Different printer detected.</b> This session started with a
+       different USB device — the bundle would mix data from two printers. Unless that is
+       intentional, use “Start a fresh session” below.</div>`
+    : '';
+
+  const summary = document.querySelector('#summary') as HTMLElement;
+  const readiness = bundleReadiness(steps, session);
+  const counts: Record<string, number> = {};
+  for (const definition of steps) {
+    const status = session.step(definition.id).status;
+    counts[status] = (counts[status] ?? 0) + 1;
+  }
+  const parts = Object.entries(counts)
+    .map(([status, count]) => `${count} ${status}`)
+    .join(' · ');
+  const titleOf = (id: string): string =>
+    cards.get(id)?.definition.title ?? id;
+  summary.innerHTML =
+    `<p><b>Session so far:</b> ${escapeHtml(parts)}.</p>` +
+    (readiness.pendingRequired.length > 0
+      ? `<p>Core steps not run yet: ${readiness.pendingRequired
+          .map((id) => escapeHtml(titleOf(id)))
+          .join(', ')}.</p>`
+      : '') +
+    (readiness.missingObservations.length > 0
+      ? `<p>📝 Unanswered observation forms (what the human saw is the one thing no trace
+         captures): ${readiness.missingObservations
+           .map((id) => escapeHtml(titleOf(id)))
+           .join(', ')}.</p>`
+      : '');
 }
 
 harness.onConnectionChange(() => renderAll());
@@ -402,6 +455,10 @@ async function runStep(card: Card): Promise<void> {
 
   running = null;
   activeCancel = null;
+
+  // A step that just passed may unblock ones parked as not-applicable for a
+  // missing prerequisite (print steps before the model was identified).
+  refreshApplicability(steps, session);
   renderAll();
 
   const record = session.step(card.definition.id);
@@ -424,6 +481,29 @@ notes.addEventListener('change', () => session.setNotes(notes.value));
 document.querySelector('#download')?.addEventListener('click', () => {
   void (async () => {
     session.setNotes(notes.value);
+
+    // The bundle is always available — but a careless early download gets a
+    // heads-up about what it is leaving on the table, and the gaps travel
+    // inside the bundle so a maintainer can see them too.
+    const readiness = bundleReadiness(steps, session);
+    session.setSnapshot('readinessAtDownload', readiness);
+    if (readiness.pendingRequired.length > 0 || readiness.missingObservations.length > 0) {
+      const lines: string[] = [];
+      if (readiness.pendingRequired.length > 0) {
+        lines.push(`Core steps not run yet: ${readiness.pendingRequired.join(', ')}.`);
+      }
+      if (readiness.missingObservations.length > 0) {
+        lines.push(
+          `Observation forms still unanswered: ${readiness.missingObservations.join(', ')}.`,
+        );
+      }
+      const proceed = confirm(
+        `${lines.join('\n')}\n\nDownload the bundle anyway? ` +
+          '(Cancel to go back — the summary above the download button lists what is missing.)',
+      );
+      if (!proceed) return;
+    }
+
     const zip = await buildBundle(session, harness.recorder.events(), harness.usbLog);
     // Uint8Array<ArrayBuffer> in the DOM lib; the copy also detaches nothing.
     const blob = new Blob([new Uint8Array(zip).buffer as ArrayBuffer], {

@@ -56,6 +56,7 @@ function listZip(buffer) {
 const FAKE_DEVICE = `
 class FakeQL {
   vendorId = 0x04f9; productId = 0x209b;
+  mediaWidthMm = 29; // deliberately NOT the 62 the smoke declares
   productName = 'QL-820NWB (fake)'; manufacturerName = 'Fake Industries';
   serialNumber = 'FAKE0001'; usbVersionMajor = 2; usbVersionMinor = 0;
   opened = false; configuration = null;
@@ -90,7 +91,7 @@ class FakeQL {
   status(statusType, phaseType) {
     const packet = new Uint8Array(32);
     packet[0] = 0x80; packet[1] = 0x20; packet[2] = 0x42; packet[3] = 0x30;
-    packet[4] = 0x38; packet[10] = 62; packet[11] = 0x0a;
+    packet[4] = 0x38; packet[10] = this.mediaWidthMm; packet[11] = 0x0a;
     packet[18] = statusType; packet[19] = phaseType ?? 0;
     return packet;
   }
@@ -171,7 +172,11 @@ const browser = await chromium.launch(EXE ? { executablePath: EXE } : {});
     .textContent();
   console.log('A: error shown:', errorText.trim().slice(0, 60));
 
+  // The download gate warns about unrun core steps here — accept it.
+  let sawDialogA = false;
+  page.once('dialog', (dialog) => { sawDialogA = true; void dialog.accept(); });
   const [download] = await Promise.all([page.waitForEvent('download'), page.click('#download')]);
+  console.log('A: download gate dialog shown:', sawDialogA);
   const zip = readFileSync(await download.path());
   const entries = listZip(zip);
   console.log('A: partial bundle entries:', Object.keys(entries).length);
@@ -211,22 +216,34 @@ const browser = await chromium.launch(EXE ? { executablePath: EXE } : {});
   console.log('B: stability:', await waitSettled(page, 'Status stability'));
 
   const print = await runStep(page, 'Print the test card');
-  // The step asks which media is loaded; pick 62 endless (not 62red/62x29).
+  // Carelessly declare 62 while the fake printer reports 29 mm media.
   await print.locator('.interact input[value^="62 — "]').check();
   await print.locator('.interact button.primary').click();
+  // The wizard must catch the lie and offer the printer's report.
+  const correction = print.locator('.interact input[value^="Use what the printer reports"]');
+  await correction.waitFor({ timeout: 15000 });
+  console.log('B: mismatch caught, correction offered');
+  await correction.check();
+  await print.locator('.interact button.primary').click();
   console.log('B: print-basic:', await waitSettled(page, 'Print the test card', 30000));
-  // Answer the observation form.
-  const observe = print.locator('.interact');
-  await observe.locator('label.choice', { hasText: 'Yes' }).first().locator('input').check();
-  await observe.locator('button.primary').click();
+  // Deliberately do NOT answer the observation form: the download gate below
+  // must notice.
 
+  let sawDialog = false;
+  page.once('dialog', (dialog) => { sawDialog = true; void dialog.accept(); });
   const [download] = await Promise.all([page.waitForEvent('download'), page.click('#download')]);
+  console.log('B: download gate dialog shown:', sawDialog);
   const zip = readFileSync(await download.path());
   const entries = listZip(zip);
   const names = Object.keys(entries);
   console.log('B: bundle entries:', names.join(', '));
   const manifest = JSON.parse(entries['manifest.json'].toString());
   console.log('B: statuses:', JSON.stringify(manifest.stepStatuses));
+  console.log('B: readiness gaps in manifest:', JSON.stringify(manifest.readiness));
+  const printStep = JSON.parse(entries['steps/print-basic.json'].toString());
+  console.log('B: printed label after correction:', printStep.data?.label,
+    'correctedFrom:', printStep.data?.verification?.correctedFrom,
+    'verdicts:', JSON.stringify(printStep.data?.verification?.verdicts));
   console.log('B: job bytes captured:', entries['jobs/print-basic.bin']?.length ?? 0);
   console.log('B: usb trace records:', JSON.parse(entries['trace.usb.json'].toString()).length);
   const device = JSON.parse(entries['device.json'].toString());

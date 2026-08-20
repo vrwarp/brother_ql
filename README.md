@@ -502,6 +502,18 @@ deterministic test cards (whose asymmetric fiducials make any mirroring or
 rotation bug visible on paper), and optionally provoking faults — cover open,
 mid-print unplug — to record how this printer fails and recovers.
 
+The wizard assumes the operator is careless, because operators are: it
+verifies every claim it can against the printer's own status before acting.
+Declaring the wrong roll (or swapping it after declaring) is caught and
+corrected from what the printer reports; printing with no media or an
+unresolved error prompts a fix-and-recheck loop; media that cannot belong to
+the declared model flags the model as probably wrong; "the cover is open" is
+checked before a fault test; the media survey notices when the roll was not
+actually swapped; steps run out of order park with the reason and unblock
+themselves once their prerequisite passes; and downloading early warns about
+unrun core steps and unanswered observation forms, recording those gaps in
+the bundle's manifest.
+
 Every step is wrapped so a failure is *recorded* rather than fatal: the wizard
 carries on to the next item, the session persists across reloads and crashes,
 and the result is downloadable at any point as **one ZIP bundle** containing

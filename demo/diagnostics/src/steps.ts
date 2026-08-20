@@ -32,11 +32,12 @@ import {
   type RawImage,
 } from '@vrwarp/brother-ql-webusb';
 
-import { collectDeviceIdentity, collectEnvironment, snapshotDescriptors } from './collect.js';
+import { collectEnvironment, snapshotDescriptors } from './collect.js';
 import type { Harness } from './harness.js';
 import type { ObservationField, StepContext, StepDefinition } from './runner.js';
 import { bytesToBase64, bytesToHex } from './session.js';
 import { paintTestCard } from './testcard.js';
+import { assessMediaStatus, describeReportedMedia, sameMediaReported } from './verify.js';
 
 const APP_VERSION = '1';
 
@@ -98,21 +99,243 @@ interface PrintCapture {
   usbSeqStart: number;
   /** Set when the failure was the outcome the step was inducing. */
   expectedError?: { code?: string; message: string; statuses: StatusSummary[] };
+  /** How the pre-print verification went: status seen, corrections applied. */
+  verification?: MediaVerification;
+}
+
+interface MediaVerification {
+  /** The status the check was based on. */
+  preStatus: StatusSummary;
+  reported: string;
+  /** Verdicts seen across the check loop, e.g. 'mismatch', 'ok'. */
+  verdicts: string[];
+  /** Set when the user accepted the printer's report over their declaration. */
+  correctedFrom?: string;
+  /** Set when the user insisted on proceeding against the printer's report. */
+  overridden?: boolean;
+}
+
+/**
+ * Check a human claim ("this media is loaded", "the cover is open") against
+ * the printer's own status before printing, and steer the user when the two
+ * disagree. Returns the label to actually print on — which may be the one
+ * the printer reported, if the user accepts the correction.
+ *
+ * Careless-path coverage: declaring the wrong roll, swapping media after
+ * declaring, running with no media at all, an unresolved printer error, a
+ * declared model the media cannot belong to, and pressing "the cover is
+ * open" with the cover shut.
+ */
+async function verifyBeforePrint(
+  harness: Harness,
+  ctx: StepContext,
+  declared: Label,
+  expectFault: boolean,
+): Promise<{ label: Label; verification: MediaVerification }> {
+  const model = harness.declaredModel() as Model;
+  let label = declared;
+  const verdicts: string[] = [];
+  let lastStatus: PrinterStatus | null = null;
+  let overridden = false;
+  let correctedFrom: string | undefined;
+
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const printer = await harness.ensureConnected();
+    const status = await printer.queryStatus();
+    lastStatus = status;
+    const reported = describeReportedMedia(status);
+
+    if (expectFault) {
+      // The step is inducing a failure; here the *absence* of a fault is the
+      // suspicious case — the classic "clicked the button, never opened the
+      // cover".
+      if (status.errors.length > 0) {
+        verdicts.push('fault-armed');
+        ctx.log(`Fault confirmed by the printer: ${status.errors.map((e) => e.message).join('; ')}`);
+        break;
+      }
+      verdicts.push('no-fault-yet');
+      const answer = await ctx.ask(
+        [
+          {
+            id: 'next',
+            label:
+              'The printer does not report a fault yet — the cover may not really be open. ' +
+              'What now?',
+            choices: [
+              'I fixed it — check again',
+              'Send the job anyway (the fault may only show while printing)',
+            ],
+          },
+        ],
+        'Continue',
+      );
+      if (answer.next?.startsWith('I fixed it')) continue;
+      break;
+    }
+
+    const assessment = assessMediaStatus(label, model, status);
+    verdicts.push(assessment.kind);
+
+    if (assessment.kind === 'ok') {
+      ctx.log(`Media check: printer reports ${reported}, matching '${label.identifier}'.`);
+      break;
+    }
+    if (assessment.kind === 'unverifiable') {
+      ctx.log('Media check: this media does not self-report; proceeding on your declaration.');
+      break;
+    }
+    if (assessment.kind === 'no-media') {
+      const answer = await ctx.ask(
+        [
+          {
+            id: 'next',
+            label:
+              'The printer reports NO media loaded. Load the roll, close the cover, then continue.',
+            choices: ['I loaded it — check again', 'Proceed anyway'],
+          },
+        ],
+        'Continue',
+      );
+      if (answer.next?.startsWith('I loaded')) continue;
+      overridden = true;
+      break;
+    }
+    if (assessment.kind === 'printer-error') {
+      const answer = await ctx.ask(
+        [
+          {
+            id: 'next',
+            label:
+              `The printer reports an error: ${assessment.messages.join('; ')}. ` +
+              'Resolve it (close the cover, reseat the roll), then continue.',
+            choices: ['I resolved it — check again', 'Proceed anyway'],
+          },
+        ],
+        'Continue',
+      );
+      if (answer.next?.startsWith('I resolved')) continue;
+      overridden = true;
+      break;
+    }
+    if (assessment.kind === 'mismatch') {
+      const best = assessment.suggested[0] as Label;
+      const answer = await ctx.ask(
+        [
+          {
+            id: 'next',
+            label:
+              `You declared '${label.identifier}', but the printer reports ${reported}, ` +
+              `which matches '${assessment.suggested.map((s) => s.identifier).join("', '")}'. ` +
+              'Printing with the wrong size wastes a label or stalls the printer.',
+            choices: [
+              `Use what the printer reports: '${best.identifier}' (recommended)`,
+              `Keep '${label.identifier}' anyway`,
+              'I swapped the media — check again',
+            ],
+          },
+        ],
+        'Continue',
+      );
+      if (answer.next?.startsWith('Use what')) {
+        correctedFrom = label.identifier;
+        label = best;
+        harness.session.setDeclared('labelId', label.identifier);
+        ctx.log(`Corrected the media to '${label.identifier}' from the printer's report.`);
+        break;
+      }
+      if (answer.next?.startsWith('I swapped')) continue;
+      overridden = true;
+      break;
+    }
+    if (assessment.kind === 'model-conflict') {
+      const answer = await ctx.ask(
+        [
+          {
+            id: 'next',
+            label:
+              `The printer reports ${reported}, which matches ` +
+              `'${assessment.wouldMatch.map((s) => s.identifier).join("', '")}' — but none of ` +
+              `those are usable on a ${model.identifier}. The declared model may be wrong ` +
+              '(re-run "Identify the printer" to change it).',
+            choices: ['Proceed anyway', 'Check again'],
+          },
+        ],
+        'Continue',
+      );
+      if (answer.next === 'Check again') continue;
+      overridden = true;
+      break;
+    }
+    // unknown-media: nothing in the table matches; record and proceed.
+    ctx.log(`Media check: printer reports ${reported}, which matches no known label. Recorded.`);
+    break;
+  }
+
+  const verification: MediaVerification = {
+    preStatus: summarizeStatus(lastStatus as PrinterStatus),
+    reported: describeReportedMedia(lastStatus as PrinterStatus),
+    verdicts,
+    ...(correctedFrom !== undefined ? { correctedFrom } : {}),
+    ...(overridden ? { overridden } : {}),
+  };
+  return { label, verification };
+}
+
+/**
+ * Reconnect after the user claims to have replugged — with patience for the
+ * user who clicks first and plugs second. Retries with guidance instead of
+ * failing the step on the first attempt.
+ */
+async function reconnectWithRetries(harness: Harness, ctx: StepContext): Promise<BrotherQLPrinter> {
+  let lastError: unknown = null;
+  for (let attempt = 0; attempt < 5; attempt++) {
+    try {
+      return await harness.ensureConnected();
+    } catch (error) {
+      lastError = error;
+      const message = error instanceof Error ? error.message : String(error);
+      ctx.log(`Reconnect attempt ${attempt + 1} failed: ${message}`);
+      const answer = await ctx.ask(
+        [
+          {
+            id: 'next',
+            label:
+              'The printer is not reachable yet. Check that the cable is fully seated and ' +
+              'the printer is powered on — it can take a few seconds to enumerate.',
+            choices: ['Try again', 'Give up on this step'],
+          },
+        ],
+        'Continue',
+      );
+      if (answer.next !== 'Try again') break;
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error('Could not reconnect.');
 }
 
 /** Build, send and record one job. Throws only unexpected failures. */
 async function runPrint(
   harness: Harness,
   ctx: StepContext,
-  label: Label,
+  declaredLabel: Label,
   options: Record<string, unknown>,
   pages: number,
   expectError: boolean,
   scale: 1 | 2 = 1,
 ): Promise<PrintCapture> {
-  const printer = await harness.ensureConnected();
   const model = harness.declaredModel();
   if (!model) throw new Error('No printer model declared.');
+
+  // Never take the declaration at face value: the printer's own status
+  // arbitrates before any bytes are sent, and can correct the label.
+  const { label, verification } = await verifyBeforePrint(
+    harness,
+    ctx,
+    declaredLabel,
+    expectError,
+  );
+  const printer = await harness.ensureConnected();
 
   const image = cardFor(label, model, scale, options.red === true);
   const images = Array.from({ length: pages }, () => image);
@@ -131,6 +354,7 @@ async function runPrint(
     statuses: [],
     recorderSeqStart: harness.recorder.recordedCount,
     usbSeqStart: harness.usbLog.length,
+    verification,
   };
 
   const started = performance.now();
@@ -194,7 +418,9 @@ const PRINT_OBSERVATIONS: readonly ObservationField[] = [
 ];
 
 function requireModel(harness: Harness): true | string {
-  return harness.declaredModel() ? true : 'Run the "Identify the printer" step first.';
+  return harness.declaredModel()
+    ? true
+    : 'Blocked until "Identify the printer" has run — it unblocks itself once that step passes.';
 }
 
 function currentLabel(harness: Harness): Label | null {
@@ -270,14 +496,17 @@ export function buildSteps(harness: Harness): StepDefinition[] {
         missing, note it in the final comments.</p>`,
       async run(ctx) {
         const printer = await harness.requestDevice();
-        const device = harness.rawDevice as USBDevice;
-        const identity = await collectDeviceIdentity(device, session.meta.includeSerial);
-        session.setSnapshot('deviceIdentity', identity);
-        session.setSnapshot('descriptorsPreOpen', snapshotDescriptors(device));
+        const identity = await harness.captureDeviceSnapshots();
         ctx.log(
-          `Selected ${identity.productName ?? 'unnamed device'} ` +
-            `(${identity.vendorId}:${identity.productId}).`,
+          `Selected ${identity?.productName ?? 'unnamed device'} ` +
+            `(${identity?.vendorId}:${identity?.productId}).`,
         );
+        if (harness.deviceMismatch) {
+          ctx.log(
+            'Warning: this is a different device than this session started with. ' +
+              'The bundle will mix two printers — consider starting a fresh session.',
+          );
+        }
         return { identity, opened: printer.opened };
       },
     },
@@ -323,6 +552,12 @@ export function buildSteps(harness: Harness): StepDefinition[] {
         );
         const declared = answers.model ?? '';
         if (declared && declared !== 'Not listed / unsure') harness.setModel(declared);
+        else {
+          ctx.log(
+            'No model declared: the print steps stay blocked until one is. ' +
+              'Re-run this step once you can read the model off the casing.',
+          );
+        }
         session.setDeclared('modelAsDeclared', declared);
 
         const printer = await harness.ensureConnected();
@@ -331,10 +566,31 @@ export function buildSteps(harness: Harness): StepDefinition[] {
           `Status: model code 0x${status.modelCode.toString(16)}, ` +
             `${status.mediaWidthMm} mm ${status.mediaType} media.`,
         );
+
+        // Cross-check the declaration against the reported media: media that
+        // maps to known labels but to none usable on the declared model is
+        // strong evidence the wrong model was picked from the list.
+        let mediaModelConflict = false;
+        const model = harness.declaredModel();
+        if (model && status.mediaWidthMm > 0 && status.mediaType !== 'none') {
+          const forModel = suggestLabels(status, model);
+          const anyModel = suggestLabels(status);
+          if (forModel.length === 0 && anyModel.length > 0) {
+            mediaModelConflict = true;
+            ctx.log(
+              `Warning: the printer reports ${describeReportedMedia(status)}, which matches ` +
+                `'${anyModel.map((l) => l.identifier).join("', '")}' — but a ` +
+                `${model.identifier} cannot take any of those. Double-check the model on ` +
+                'the casing and re-run this step if it is wrong.',
+            );
+          }
+        }
+
         return {
           declaredModel: declared,
           modelCode: status.modelCode,
           status: summarizeStatus(status),
+          mediaModelConflict,
         };
       },
     },
@@ -384,10 +640,39 @@ export function buildSteps(harness: Harness): StepDefinition[] {
       async run(ctx) {
         const model = harness.declaredModel() as Model;
         const surveyed: unknown[] = [];
+        let previous: PrinterStatus | null = null;
         for (let round = 0; round < 12; round++) {
           const label = await askForLabel(harness, ctx, model);
           const printer = await harness.ensureConnected();
-          const status = await printer.queryStatus();
+          let status = await printer.queryStatus();
+
+          // The classic careless move: "yes, I swapped the roll" — without
+          // swapping the roll. The printer knows.
+          while (previous && sameMediaReported(previous, status)) {
+            const answer = await ctx.ask(
+              [
+                {
+                  id: 'next',
+                  label:
+                    `The printer reports the same media as the previous round ` +
+                    `(${describeReportedMedia(status)}). Did the swap actually happen?`,
+                  choices: [
+                    'I swapped it now — check again',
+                    'It really is a different roll of the same size — record it',
+                    'Finish the survey instead',
+                  ],
+                },
+              ],
+              'Continue',
+            );
+            if (answer.next?.startsWith('I swapped')) {
+              status = await printer.queryStatus();
+              continue;
+            }
+            if (answer.next?.startsWith('Finish')) return { surveyed };
+            break;
+          }
+
           const suggested = suggestLabels(status, model).map((entry) => entry.identifier);
           const agrees = suggested.includes(label.identifier);
           surveyed.push({
@@ -404,6 +689,7 @@ export function buildSteps(harness: Harness): StepDefinition[] {
               `${status.mediaType}; library suggests [${suggested.join(', ') || 'nothing'}] — ` +
               (agrees ? 'agreement.' : 'MISMATCH (this is a valuable finding).'),
           );
+          previous = status;
 
           const next = await ctx.ask(
             [
@@ -611,15 +897,42 @@ export function buildSteps(harness: Harness): StepDefinition[] {
         </ol>`,
       async run(ctx) {
         await harness.ensureConnected();
-        const waiting = harness.waitForDisconnect(ctx.signal);
+        const waiting = harness.waitForDisconnect(ctx.signal).then(() => 'disconnected' as const);
         await ctx.waitForUser('I am about to unplug the cable — arm the detector');
         ctx.log('Waiting for the disconnect… unplug the cable now.');
         const started = performance.now();
-        await waiting;
+
+        // Careless path: armed the detector, then never pulled the cable.
+        // Check in periodically instead of silently burning the step timeout.
+        for (;;) {
+          const outcome = await Promise.race([
+            waiting,
+            new Promise<'still-waiting'>((resolve) =>
+              setTimeout(() => resolve('still-waiting'), 45_000),
+            ),
+          ]);
+          if (outcome === 'disconnected') break;
+          const answer = await ctx.ask(
+            [
+              {
+                id: 'next',
+                label:
+                  'No disconnect detected after 45 seconds — the cable does not seem to ' +
+                  'have been unplugged. Pull the USB plug itself, not just the wall power.',
+                choices: ['Keep waiting — I will unplug it now', 'Abandon this step'],
+              },
+            ],
+            'Continue',
+          );
+          if (!answer.next?.startsWith('Keep waiting')) {
+            throw new Error('The cable was never unplugged, so there was nothing to detect.');
+          }
+        }
         const detectMs = Math.round(performance.now() - started);
         ctx.log(`Disconnect detected (${detectMs} ms after arming).`);
+
         await ctx.waitForUser('The cable is plugged back in');
-        const printer = await harness.ensureConnected();
+        const printer = await reconnectWithRetries(harness, ctx);
         const status = await printer.queryStatus();
         ctx.log('Reconnected and the printer answers again.');
         return { detectMs, statusAfterReconnect: summarizeStatus(status) };
@@ -657,7 +970,10 @@ export function buildSteps(harness: Harness): StepDefinition[] {
       ],
       async run(ctx) {
         const model = harness.declaredModel() as Model;
-        const label = await resolveLabel(harness, ctx, model);
+        const declared = await resolveLabel(harness, ctx, model);
+        // Verify media first, so a wrong roll or an open cover cannot
+        // masquerade as the unplug failure this step exists to capture.
+        const { label } = await verifyBeforePrint(harness, ctx, declared, false);
         if (!isEndless(label)) {
           ctx.log('Die-cut media loaded; the long card uses one label instead of tape length.');
         }
@@ -679,7 +995,10 @@ export function buildSteps(harness: Harness): StepDefinition[] {
           capture.outcome = 'completed';
           capture.pagesPrinted = result.pagesPrinted;
           capture.statuses = statuses;
-          ctx.log('The job completed — the cable was not pulled in time. Recorded as such.');
+          ctx.log(
+            'The job completed — the cable was not pulled in time. Recorded as such; ' +
+              'press "Run again" and pull the plug while the label is still feeding.',
+          );
         } catch (error) {
           if (!(error instanceof DeviceDisconnectedError) && !(error instanceof PrinterStatusError)) {
             throw error;
@@ -688,8 +1007,14 @@ export function buildSteps(harness: Harness): StepDefinition[] {
           capture.error = { code: error.code, message: error.message };
           ctx.log(`Captured the failure: ${error.name}.`);
         }
+        if (capture.outcome === 'completed') {
+          // Nothing was unplugged; skip the replug theatre.
+          const status = await (await harness.ensureConnected()).queryStatus();
+          capture.statusAfterReconnect = summarizeStatus(status);
+          return capture;
+        }
         await ctx.waitForUser('The cable is plugged back in');
-        const reconnected = await harness.ensureConnected();
+        const reconnected = await reconnectWithRetries(harness, ctx);
         const status = await reconnected.queryStatus();
         capture.statusAfterReconnect = summarizeStatus(status);
         ctx.log('Reconnected after the mid-print unplug.');

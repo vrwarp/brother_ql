@@ -208,3 +208,69 @@ export function skipStep(definition: StepDefinition, session: DiagnosticSession)
     finishedAt: new Date().toISOString(),
   });
 }
+
+/** Whether a step has an observation form the user has not answered yet. */
+export function observationsPending(
+  definition: StepDefinition,
+  session: DiagnosticSession,
+): boolean {
+  if (!definition.observations || definition.observations.length === 0) return false;
+  const record = session.step(definition.id);
+  if (record.status !== 'passed' && record.status !== 'failed') return false;
+  return !record.observations || Object.keys(record.observations).length === 0;
+}
+
+/**
+ * Re-evaluate steps parked as not-applicable.
+ *
+ * A step blocked on a prerequisite ("identify the printer first") is marked
+ * not-applicable when run out of order. Once the prerequisite is satisfied
+ * the block is stale — a careless user would read "not-applicable" as final
+ * and never come back. This resets any such step to pending, and returns the
+ * ids it reset so the UI can refresh them.
+ */
+export function refreshApplicability(
+  definitions: readonly StepDefinition[],
+  session: DiagnosticSession,
+): string[] {
+  const reset: string[] = [];
+  for (const definition of definitions) {
+    const record = session.step(definition.id);
+    if (record.status !== 'not-applicable') continue;
+    if ((definition.appliesTo?.(session) ?? true) === true) {
+      session.updateStep(definition.id, {
+        status: 'pending',
+        notApplicableReason: undefined,
+        finishedAt: undefined,
+      });
+      reset.push(definition.id);
+    }
+  }
+  return reset;
+}
+
+export interface BundleReadiness {
+  /** Non-optional steps that have not produced a result yet. */
+  pendingRequired: string[];
+  /** Steps whose observation form is still unanswered. */
+  missingObservations: string[];
+}
+
+/** What is still outstanding before the bundle is as complete as it can be. */
+export function bundleReadiness(
+  definitions: readonly StepDefinition[],
+  session: DiagnosticSession,
+): BundleReadiness {
+  const pendingRequired: string[] = [];
+  const missingObservations: string[] = [];
+  for (const definition of definitions) {
+    const record = session.step(definition.id);
+    if (!definition.optional && record.status === 'pending') {
+      pendingRequired.push(definition.id);
+    }
+    if (observationsPending(definition, session)) {
+      missingObservations.push(definition.id);
+    }
+  }
+  return { pendingRequired, missingObservations };
+}
