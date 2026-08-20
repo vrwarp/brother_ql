@@ -39,6 +39,59 @@ Changes to the Python package are not tracked here.
   for byte, covering every model and each optional protocol feature.
 - **Demo application** with live preview, media detection and per-platform setup
   guidance, deployed to GitHub Pages.
+- **Diagnostics.** Pass a `DiagnosticsRecorder` (or any `Tracer`) to a printer or
+  transport and it narrates everything externally observable — device discovery,
+  claiming, each chunk written, the hex of every status packet, stalls, resyncs,
+  timeouts, page completions — into a bounded ring buffer with `format()` for bug
+  reports and `toJSON()` for tooling. Free when detached: call sites use optional
+  chaining, which short-circuits before the event objects are even constructed.
+- **Deterministic fuzzing.** All fuzz inputs come from a seeded PRNG
+  (`test/util/prng.ts`); failures name their seed. Codecs are fuzzed for
+  round-trips and differentially against a reference implementation, parsers for
+  totality over arbitrary bytes, the conversion pipeline for agreement with the
+  job analyser, and the printer state machine against scripted devices that
+  fragment, coalesce, delay, stall, inject junk, error out or fall silent.
+- **Integration suite** walking the full stack against a scripted device and
+  asserting on the exact bytes that reached the OUT endpoint, including error
+  recovery, mid-job unplugs and reconnects on the same object.
+- **Benchmarks** (`npm run bench`) for the hot paths, and complexity-guard tests
+  with ceilings a Raspberry Pi passes easily but an accidental O(n²) cannot.
+
+### Fixed
+
+- A page completion arriving while later pages were still being transmitted was
+  drained and discarded, so a fast printer could finish every page and the job
+  would still time out. Confirmations are now counted wherever they arrive.
+  (Found by the state-machine fuzz.)
+- One stray byte on the status endpoint used to shift every subsequent packet
+  out of frame forever; the reader now resynchronises on the `80 20 42` header.
+- An OUT endpoint that stalled again right after a halt-clear, a halt-clear that
+  itself failed, and a device accepting zero bytes were all silently ignored;
+  each is now a typed error. Short writes advance by the actual byte count
+  instead of silently skipping the tail.
+- `sendRaw()` now checks for printer errors between chunks like `print()` does,
+  so a broken printer stops a raw job early.
+- Out-of-range raster fields (raster count, margins, media bytes, row lengths)
+  threw in the Python implementation but silently wrapped here; they now throw a
+  `RasterError`. Inconsistent hand-built `BitImage`s are rejected before they
+  can corrupt a job.
+- `prepareImage()` rejects images whose buffer disagrees with their stated
+  dimensions instead of NaN-poisoning the greyscale pipeline; `pasteImage()`
+  rejects horizontal out-of-bounds pastes that used to wrap into the next row.
+- `packbitsDecode()` no longer fabricates zero bytes for a repeat header
+  truncated before its value byte.
+- `print()` rejects an empty source list and non-finite `copies` values instead
+  of hanging until the status timeout.
+- Concurrent `open()`/`close()` on the transport no longer race; reopening after
+  an unplug tears the half-open device down first.
+
+### Performance
+
+- The PackBits coder writes into preallocated buffers instead of growing a
+  number array per row; a differential fuzz pins it byte-for-byte to the old
+  implementation.
+- `convert()` prepares each distinct image once, so printing n copies costs one
+  dither pass instead of n.
 
 ### Changed from the Python implementation
 

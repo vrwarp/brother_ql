@@ -24,7 +24,7 @@ import {
   STATUS_PHASE_WAITING,
   type ReadScriptEntry,
 } from './util/mock-usb.js';
-import { forEachSeed, Prng } from './util/prng.js';
+import { Prng } from './util/prng.js';
 
 type Scenario = 'success' | 'printer-error' | 'silence';
 
@@ -139,7 +139,6 @@ describe('printer state machine fuzz', () => {
   }, 30000);
 
   it('times out with a typed error when the printer falls silent', async () => {
-    forEachSeed(3, () => {}); // keep seed numbering documented; cases below are explicit
     for (let seed = 100; seed <= 102; seed++) {
       const prng = new Prng(seed);
       // The printer confirms some progress, then never speaks again.

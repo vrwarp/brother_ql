@@ -82,10 +82,7 @@ export class BrotherQLPrinter extends BrotherQLPrinterCore {
     this.#imageNormalizer = normalizer;
   }
 
-  async #toRawImages(
-    sources: readonly PrintSource[],
-    targetWidth: number | undefined,
-  ): Promise<RawImage[]> {
+  async #toRawImages(sources: readonly PrintSource[], targetWidth: number): Promise<RawImage[]> {
     const images: RawImage[] = [];
     for (const source of sources) {
       if (isRawImage(source)) {
@@ -98,9 +95,7 @@ export class BrotherQLPrinter extends BrotherQLPrinterCore {
             'the package and call it on the printer, or pass a RawImage.',
         );
       }
-      images.push(
-        await this.#imageNormalizer(source, targetWidth === undefined ? {} : { targetWidth }),
-      );
+      images.push(await this.#imageNormalizer(source, { targetWidth }));
     }
     return images;
   }

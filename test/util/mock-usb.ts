@@ -57,6 +57,8 @@ export interface MockUsbDeviceOptions {
   maxBytesPerWrite?: number;
   /** Report success but zero bytes written, modelling a device making no progress. */
   acceptNothing?: boolean;
+  /** Rejection thrown by `transferOut`, while reads keep working. */
+  writeError?: Error;
   /**
    * Hold back the read script until something has been written.
    *
@@ -237,6 +239,9 @@ export class MockUsbDevice implements MinimalUsbDevice {
   }
 
   async transferOut(_endpointNumber: number, data: BufferSource): Promise<USBOutTransferResult> {
+    // A real device rejects transfers once closed, same as transferIn above.
+    if (!this.#opened) throw new DOMException('The device was closed.', 'NetworkError');
+    if (this.#options.writeError) throw this.#options.writeError;
     if (this.#options.hangWrites) return neverSettles();
 
     const chunk =
