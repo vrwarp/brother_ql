@@ -38,6 +38,7 @@ export {
   // to use when the imaging pipeline's weight is not wanted.
   BrotherQLPrinterCore,
   type ImageNormalizer,
+  type JobProgress,
   type PrinterEvents,
   type PrinterOptions,
   type PrintOptions,
@@ -160,6 +161,15 @@ export {
   type RotationAngle,
 } from './image/raw-image.js';
 export { computeThreshold } from './image/threshold.js';
+
+// --- diagnostics ------------------------------------------------------------
+export {
+  DiagnosticsRecorder,
+  formatTraceEvent,
+  type DiagnosticsRecorderOptions,
+  type TraceEvent,
+  type Tracer,
+} from './diagnostics.js';
 
 // --- errors ---------------------------------------------------------------
 export {

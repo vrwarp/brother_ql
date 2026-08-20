@@ -22,8 +22,10 @@ import {
   TransferTimeoutError,
   type PlatformHint,
 } from '../errors.js';
+import type { Tracer } from '../diagnostics.js';
+import { hexFormat } from '../internal/bytes.js';
 import { TypedEventTarget } from '../internal/events.js';
-import { STATUS_PACKET_LENGTH } from '../status.js';
+import { STATUS_HEADER, STATUS_PACKET_LENGTH } from '../status.js';
 import { AsyncQueue } from './async-queue.js';
 
 /** USB interface class for printers, which is what Brother QL devices expose. */
@@ -62,6 +64,8 @@ export interface TransportOptions {
   chunkSize?: number;
   /** How long a single chunk may take before the connection is abandoned. */
   writeChunkTimeoutMs?: number;
+  /** Receives trace events for debugging. See `diagnostics.ts`. */
+  diagnostics?: Tracer;
 }
 
 export type TransportEvents = {
@@ -112,6 +116,7 @@ export class UsbTransport extends TypedEventTarget<TransportEvents> {
 
   readonly #chunkSize: number;
   readonly #writeChunkTimeoutMs: number;
+  readonly #diag: Tracer | undefined;
 
   #state: TransportState = 'closed';
   #interfaceNumber: number | null = null;
@@ -119,12 +124,14 @@ export class UsbTransport extends TypedEventTarget<TransportEvents> {
   #endpointOut: USBEndpoint | null = null;
   #partial = new Uint8Array(0);
   #readerDone: Promise<void> | null = null;
+  #closePromise: Promise<void> | null = null;
 
   constructor(device: MinimalUsbDevice, options: TransportOptions = {}) {
     super();
     this.device = device;
     this.#chunkSize = options.chunkSize ?? 16 * 1024;
     this.#writeChunkTimeoutMs = options.writeChunkTimeoutMs ?? 30_000;
+    this.#diag = options.diagnostics;
   }
 
   get opened(): boolean {
@@ -138,13 +145,27 @@ export class UsbTransport extends TypedEventTarget<TransportEvents> {
   /** Open the device, claim the printer interface and start reading. */
   async open(): Promise<void> {
     if (this.#state === 'open') return;
+    // Someone closing this transport concurrently finishes first, so the two
+    // never interleave on the device.
+    if (this.#closePromise) await this.#closePromise;
+    // After an unclean death (write timeout, unplug) the device may be half
+    // open with the interface still notionally claimed. Tear it down first so
+    // reopening starts from a known state.
+    if (this.#state === 'dead') await this.close();
 
     this.statusQueue.reset();
     this.#partial = new Uint8Array(0);
 
+    this.#diag?.event('transport', 'open-start', {
+      vendorId: this.device.vendorId,
+      productId: this.device.productId,
+      productName: this.device.productName ?? undefined,
+    });
+
     try {
       if (!this.device.opened) await this.device.open();
     } catch (error) {
+      this.#diag?.event('transport', 'open-failed', { error: String(error) });
       throw new InterfaceClaimError(
         `Could not open the printer. ${claimAdvice(detectPlatform())}`,
         detectPlatform(),
@@ -166,6 +187,7 @@ export class UsbTransport extends TypedEventTarget<TransportEvents> {
       await this.device.claimInterface(target.interfaceNumber);
     } catch (error) {
       const platform = detectPlatform();
+      this.#diag?.event('transport', 'claim-failed', { platform, error: String(error) });
       throw new InterfaceClaimError(
         `Could not claim the printer interface. ${claimAdvice(platform)}`,
         platform,
@@ -174,6 +196,12 @@ export class UsbTransport extends TypedEventTarget<TransportEvents> {
     }
 
     this.#state = 'open';
+    this.#diag?.event('transport', 'open', {
+      interfaceNumber: target.interfaceNumber,
+      endpointIn: target.endpointIn.endpointNumber,
+      endpointOut: target.endpointOut.endpointNumber,
+      chunkSize: this.#chunkSize,
+    });
     this.#readerDone = this.#readLoop();
   }
 
@@ -223,7 +251,9 @@ export class UsbTransport extends TypedEventTarget<TransportEvents> {
    *
    * Runs until the transport is closed. Status packets are 32 bytes, but a
    * transfer can return several at once or split one across reads, so they are
-   * reassembled here.
+   * reassembled here. Reassembly also resynchronises on the `80 20 42` packet
+   * header: without that, one spurious byte from the device would shift every
+   * subsequent packet out of frame and poison the connection permanently.
    */
   async #readLoop(): Promise<void> {
     const endpoint = this.#endpointIn;
@@ -237,12 +267,14 @@ export class UsbTransport extends TypedEventTarget<TransportEvents> {
       } catch (error) {
         if (this.#state !== 'open') return; // close() unparked the transfer
         this.#state = 'dead';
+        this.#diag?.event('transport', 'disconnect', { during: 'read', error: String(error) });
         this.statusQueue.fail(new DeviceDisconnectedError(error));
         this.emit('disconnect');
         return;
       }
 
       if (result.status === 'stall') {
+        this.#diag?.event('transport', 'stall', { direction: 'in' });
         try {
           await this.device.clearHalt('in', endpoint.endpointNumber);
         } catch {
@@ -268,8 +300,25 @@ export class UsbTransport extends TypedEventTarget<TransportEvents> {
       }
 
       let offset = 0;
-      for (; offset + STATUS_PACKET_LENGTH <= buffer.length; offset += STATUS_PACKET_LENGTH) {
-        this.statusQueue.push(buffer.slice(offset, offset + STATUS_PACKET_LENGTH));
+      let dropped = 0;
+      while (buffer.length - offset >= STATUS_PACKET_LENGTH) {
+        if (
+          buffer[offset] === STATUS_HEADER[0] &&
+          buffer[offset + 1] === STATUS_HEADER[1] &&
+          buffer[offset + 2] === STATUS_HEADER[2]
+        ) {
+          const packet = buffer.slice(offset, offset + STATUS_PACKET_LENGTH);
+          this.#diag?.event('transport', 'status-packet', { hex: hexFormat(packet) });
+          this.statusQueue.push(packet);
+          offset += STATUS_PACKET_LENGTH;
+        } else {
+          // Out of frame: drop one byte and look for the header again.
+          offset += 1;
+          dropped += 1;
+        }
+      }
+      if (dropped > 0) {
+        this.#diag?.event('transport', 'resync', { droppedBytes: dropped });
       }
       this.#partial = buffer.slice(offset);
     }
@@ -293,22 +342,54 @@ export class UsbTransport extends TypedEventTarget<TransportEvents> {
     const endpoint = this.#endpointOut;
     if (!endpoint) throw new InterfaceClaimError('The printer has no output endpoint.');
 
+    this.#diag?.event('transport', 'write-start', { bytes: data.length });
+
     let sent = 0;
     while (sent < data.length) {
       betweenChunks?.();
 
       const chunk = data.subarray(sent, Math.min(sent + this.#chunkSize, data.length));
-      const result = await this.#writeChunk(endpoint.endpointNumber, chunk, sent, data.length);
+      let result = await this.#writeChunk(endpoint.endpointNumber, chunk, sent, data.length);
 
       if (result.status === 'stall') {
-        await this.device.clearHalt('out', endpoint.endpointNumber);
-        // Retry the chunk once; a second failure propagates.
-        await this.#writeChunk(endpoint.endpointNumber, chunk, sent, data.length);
+        this.#diag?.event('transport', 'stall', { direction: 'out', at: sent });
+        try {
+          await this.device.clearHalt('out', endpoint.endpointNumber);
+        } catch (error) {
+          // Cannot even clear the halt: the device is gone or wedged.
+          throw new DeviceDisconnectedError(error);
+        }
+        // Retry the chunk once; a second stall means the endpoint is wedged
+        // beyond what a halt-clear fixes, which is indistinguishable from a
+        // dead device as far as this job is concerned.
+        result = await this.#writeChunk(endpoint.endpointNumber, chunk, sent, data.length);
+        if (result.status !== 'ok') {
+          throw new DeviceDisconnectedError(
+            new Error('The output endpoint stalled again immediately after a halt-clear.'),
+          );
+        }
       }
 
-      sent += chunk.length;
+      // A bulk transfer may complete short. Advance by what the device
+      // actually accepted and carry on from there rather than assuming the
+      // whole chunk went out.
+      const written = result.bytesWritten ?? chunk.length;
+      if (written <= 0) {
+        // Accepting zero bytes forever would spin this loop; treat a transfer
+        // that makes no progress as the device having gone away.
+        throw new DeviceDisconnectedError(
+          new Error('The device accepted none of the bytes in a transfer.'),
+        );
+      }
+      if (written < chunk.length) {
+        this.#diag?.event('transport', 'short-write', { expected: chunk.length, written });
+      }
+
+      sent += Math.min(written, chunk.length);
       onProgress?.(sent, data.length);
     }
+
+    this.#diag?.event('transport', 'write-done', { bytes: sent });
   }
 
   async #writeChunk(
@@ -323,6 +404,7 @@ export class UsbTransport extends TypedEventTarget<TransportEvents> {
         // A bulk transfer cannot be cancelled, so the connection is poisoned
         // deliberately rather than left in an unknown state.
         this.#state = 'dead';
+        this.#diag?.event('transport', 'write-timeout', { sent, total });
         this.statusQueue.fail(new TransferTimeoutError(sent, total));
         void this.device.close().catch(() => {});
         reject(new TransferTimeoutError(sent, total));
@@ -338,6 +420,7 @@ export class UsbTransport extends TypedEventTarget<TransportEvents> {
       if (error instanceof TransferTimeoutError) throw error;
       // Any other rejection from a bulk write means the device is gone: either
       // it was unplugged, or it was closed underneath us.
+      this.#diag?.event('transport', 'disconnect', { during: 'write', error: String(error) });
       throw new DeviceDisconnectedError(error);
     } finally {
       if (timer !== undefined) clearTimeout(timer);
@@ -347,9 +430,21 @@ export class UsbTransport extends TypedEventTarget<TransportEvents> {
   /** Release the interface and close the device. */
   async close(): Promise<void> {
     if (this.#state === 'closed') return;
+    // A second concurrent close joins the first instead of double-releasing.
+    if (this.#closePromise) return this.#closePromise;
 
+    this.#closePromise = this.#doClose();
+    try {
+      await this.#closePromise;
+    } finally {
+      this.#closePromise = null;
+    }
+  }
+
+  async #doClose(): Promise<void> {
     const wasOpen = this.#state === 'open';
     this.#state = 'closing';
+    this.#diag?.event('transport', 'close-start', {});
 
     if (wasOpen && this.#interfaceNumber !== null) {
       // Releasing can fail while a transfer is parked; closing below is what
@@ -373,5 +468,6 @@ export class UsbTransport extends TypedEventTarget<TransportEvents> {
     this.#endpointIn = null;
     this.#endpointOut = null;
     this.statusQueue.fail(new DeviceDisconnectedError());
+    this.#diag?.event('transport', 'close', {});
   }
 }

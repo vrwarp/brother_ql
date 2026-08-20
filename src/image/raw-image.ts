@@ -49,8 +49,19 @@ export function createWhiteImage(width: number, height: number): RawImage {
  *
  * Alpha is copied verbatim rather than blended, matching the way
  * `conversion.py` pastes an already-composited image onto its white canvas.
+ *
+ * Rows that fall above or below the destination are clipped. Horizontally the
+ * paste must fit: pixel rows are laid out contiguously, so a paste crossing
+ * the left or right edge would not clip, it would wrap into the neighbouring
+ * row — silent corruption, and so rejected instead.
  */
 export function pasteImage(dst: RawImage, src: RawImage, x: number, y: number): void {
+  if (!Number.isInteger(x) || x < 0 || x + src.width > dst.width) {
+    throw new RangeError(
+      `Cannot paste a ${src.width} pixel wide image at x=${x} into a ` +
+        `${dst.width} pixel wide image.`,
+    );
+  }
   const rowBytes = src.width * 4;
   for (let row = 0; row < src.height; row++) {
     const dstY = y + row;

@@ -49,6 +49,14 @@ export interface MockUsbDeviceOptions {
   hangWrites?: boolean;
   /** Report a stall on the first `transferOut`. */
   stallFirstWrite?: boolean;
+  /** Report a stall on every `transferOut`, modelling a wedged endpoint. */
+  stallAllWrites?: boolean;
+  /** Rejection thrown by `clearHalt`. */
+  clearHaltError?: Error;
+  /** Accept at most this many bytes per `transferOut` (a short write). */
+  maxBytesPerWrite?: number;
+  /** Report success but zero bytes written, modelling a device making no progress. */
+  acceptNothing?: boolean;
   /**
    * Hold back the read script until something has been written.
    *
@@ -186,6 +194,7 @@ export class MockUsbDevice implements MinimalUsbDevice {
 
   async clearHalt(direction: USBDirection, endpointNumber: number): Promise<void> {
     this.clearHaltCalls.push({ direction, endpointNumber });
+    if (this.#options.clearHaltError) throw this.#options.clearHaltError;
   }
 
   async transferIn(_endpointNumber: number, _length: number): Promise<USBInTransferResult> {
@@ -246,13 +255,23 @@ export class MockUsbDevice implements MinimalUsbDevice {
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     this.#writeCount += 1;
-    if (this.#options.stallFirstWrite && this.#writeCount === 1) {
+    if (
+      this.#options.stallAllWrites ||
+      (this.#options.stallFirstWrite && this.#writeCount === 1)
+    ) {
       return { status: 'stall', bytesWritten: 0 } as USBOutTransferResult;
     }
 
-    this.writes.push(chunk);
-    this.#options.onWrite?.(chunk, this);
-    return { status: 'ok', bytesWritten: chunk.length } as USBOutTransferResult;
+    if (this.#options.acceptNothing) {
+      return { status: 'ok', bytesWritten: 0 } as USBOutTransferResult;
+    }
+
+    const max = this.#options.maxBytesPerWrite;
+    const accepted = max !== undefined && max < chunk.length ? chunk.subarray(0, max) : chunk;
+
+    this.writes.push(accepted);
+    this.#options.onWrite?.(accepted, this);
+    return { status: 'ok', bytesWritten: accepted.length } as USBOutTransferResult;
   }
 }
 

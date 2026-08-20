@@ -132,6 +132,29 @@ export function prepareImage(
   const resolvedLabel = resolveLabel(label);
   const opts = resolveOptions(options);
 
+  // A RawImage whose buffer disagrees with its dimensions would not fail
+  // loudly below — the pipeline would read past the end of the buffer,
+  // producing NaN-poisoned grey values that quietly become black or white
+  // dots. Reject it here, where the mistake can still be named.
+  if (
+    !Number.isInteger(image.width) ||
+    !Number.isInteger(image.height) ||
+    image.width <= 0 ||
+    image.height <= 0
+  ) {
+    throw new RasterError(
+      `Image dimensions must be positive integers, got ${image.width}x${image.height}.`,
+      { actual: [image.width, image.height] },
+    );
+  }
+  if (image.data.length !== image.width * image.height * 4) {
+    throw new RasterError(
+      `Image data is ${image.data.length} bytes but ${image.width}x${image.height} RGBA ` +
+        `needs ${image.width * image.height * 4}.`,
+      { actual: [image.width, image.height] },
+    );
+  }
+
   if (opts.red && !resolvedModel.twoColor) {
     throw new UnsupportedCommandError(
       `Printing in red is not supported by ${resolvedModel.identifier}.`,
@@ -252,8 +275,17 @@ export function convert(
   raster.addInitialize();
   raster.addSwitchMode();
 
+  // Printing n copies passes the same image n times. The pipeline is pure, so
+  // each distinct image needs preparing once, not once per copy — on a
+  // Raspberry Pi class machine the dither pass dominates the job.
+  const prepared = new Map<RawImage, PreparedPage>();
+
   for (const image of images) {
-    const page = prepareImage(image, raster.model, resolvedLabel, options);
+    let page = prepared.get(image);
+    if (!page) {
+      page = prepareImage(image, raster.model, resolvedLabel, options);
+      prepared.set(image, page);
+    }
 
     raster.addStatusInformation();
 

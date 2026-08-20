@@ -17,10 +17,10 @@ import { convert, expectedImageSize, type ConvertOptions } from './convert.js';
 import type { RawImage } from './image/raw-image.js';
 import { BrotherQLPrinterCore, type PrintProgress, type PrintResult } from './printer-core.js';
 import { BrotherQLRaster } from './raster.js';
-import type { PrinterStatus } from './status.js';
 
 export {
   BrotherQLPrinterCore,
+  type JobProgress,
   type PrintProgress,
   type PrintResult,
   type PrinterEvents,
@@ -123,7 +123,16 @@ export class BrotherQLPrinter extends BrotherQLPrinterCore {
       const list = Array.isArray(sources)
         ? (sources as readonly PrintSource[])
         : [sources as PrintSource];
-      const copies = Math.max(1, Math.floor(options.copies ?? 1));
+      if (list.length === 0) {
+        // An empty job would still carry the preamble, which the printer
+        // accepts and never answers — the caller would wait out the full
+        // status timeout for a job that printed nothing.
+        throw new TypeError('Nothing to print: the sources list is empty.');
+      }
+      const requestedCopies = options.copies ?? 1;
+      const copies = Number.isFinite(requestedCopies)
+        ? Math.max(1, Math.floor(requestedCopies))
+        : 1;
       const idleMs = options.statusTimeoutMs ?? 10_000;
 
       onProgress?.({
@@ -142,21 +151,44 @@ export class BrotherQLPrinter extends BrotherQLPrinterCore {
         for (let copy = 0; copy < copies; copy++) pages.push(image);
       }
 
+      this.diagnostics?.event('printer', 'convert-start', {
+        model: model.identifier,
+        label: options.label,
+        pages: pages.length,
+      });
+
       const raster = new BrotherQLRaster(model);
       const instructions = convert(raster, pages, options.label, options);
       const pageCount = pages.length;
 
+      this.diagnostics?.event('printer', 'convert-done', {
+        bytes: instructions.length,
+        pages: pageCount,
+      });
+
       // Drop anything the printer said before this job started.
       this.transport.statusQueue.clear();
 
-      let lastStatus: PrinterStatus | null = null;
+      this.diagnostics?.event('printer', 'send-start', {
+        bytes: instructions.length,
+        pageCount,
+        nonBlocking: options.nonBlocking ?? false,
+      });
 
-      // Checked between chunks so an error stops the job promptly instead of
-      // after every byte has been pushed at a printer that cannot print them.
-      const checkForErrors = (): void => {
-        const seen = this.drainForErrors();
-        if (seen) lastStatus = seen;
-      };
+      // Shared between the write's between-chunks drain and the wait after it,
+      // so a page the printer confirms while later pages are still being
+      // transmitted is counted rather than lost. The drain also stops the job
+      // promptly when the printer reports an error, instead of pushing every
+      // remaining byte at a printer that cannot print them.
+      const progress = this.startJob(pageCount);
+      const onPageDone = (pagesPrinted: number): void =>
+        onProgress?.({
+          phase: 'printing',
+          bytesSent: instructions.length,
+          bytesTotal: instructions.length,
+          pagesCompleted: pagesPrinted,
+          pageCount,
+        });
 
       await this.transport.write(
         instructions,
@@ -165,25 +197,17 @@ export class BrotherQLPrinter extends BrotherQLPrinterCore {
             phase: 'sending',
             bytesSent,
             bytesTotal,
-            pagesCompleted: 0,
+            pagesCompleted: progress.pagesPrinted,
             pageCount,
           }),
-        checkForErrors,
+        () => this.drainForErrors(progress, onPageDone),
       );
 
       if (options.nonBlocking) {
-        return { pagesPrinted: 0, lastStatus };
+        return { pagesPrinted: progress.pagesPrinted, lastStatus: progress.lastStatus };
       }
 
-      return await this.awaitCompletion(pageCount, idleMs, lastStatus, (pagesPrinted) =>
-        onProgress?.({
-          phase: 'printing',
-          bytesSent: instructions.length,
-          bytesTotal: instructions.length,
-          pagesCompleted: pagesPrinted,
-          pageCount,
-        }),
-      );
+      return await this.awaitCompletion(progress, idleMs, onPageDone);
     } finally {
       this.release();
     }
