@@ -229,6 +229,51 @@ Every error carries a stable `code`:
 | `busy` | Another operation is in progress |
 | `malformed-status` | An unparseable status packet |
 
+### Diagnostics
+
+When a printer misbehaves in the field, the question is always the same: what
+was actually said on the wire, and when? Pass a `DiagnosticsRecorder` and the
+transport and printer narrate everything externally observable through it —
+device discovery, interface claiming, every chunk written, the hex of every
+status packet received, stalls, resyncs, timeouts and page completions — into a
+fixed-size ring buffer, like a logic analyser with a circular capture:
+
+```ts
+import { BrotherQLPrinter, DiagnosticsRecorder } from '@vrwarp/brother-ql-webusb';
+
+const diagnostics = new DiagnosticsRecorder(); // keeps the last 512 events
+const printer = await BrotherQLPrinter.requestDevice({ model: 'QL-820NWB', diagnostics });
+
+try {
+  await printer.open();
+  await printer.print(canvas, { label: '62' });
+} catch (error) {
+  // The story so far, one line per event, ready for a bug report:
+  console.error(error, '\n' + diagnostics.format().join('\n'));
+  // Or structured: JSON.stringify(diagnostics) / diagnostics.events()
+}
+```
+
+```text
++     0.0ms transport open-start vendorId=1273 productId=8347 productName=QL-820NWB
++     2.1ms transport open interfaceNumber=0 endpointIn=1 endpointOut=2 chunkSize=16384
++     3.0ms printer convert-start model=QL-820NWB label=62 pages=1
++    25.8ms printer send-start bytes=25917 pageCount=1 nonBlocking=false
++    26.0ms transport write-start bytes=25917
++   118.9ms transport status-packet hex=80 20 42 30 4F 30 00 00 00 00 3E 0A ...
++   119.0ms printer page-completed pagesPrinted=1 pageCount=1
++   119.4ms printer job-done pagesPrinted=1
+```
+
+Recording is O(1) per event and bounded in memory, so it is safe to leave
+attached permanently and read only when something goes wrong. With no recorder
+attached the instrumentation costs one null check per site — the event objects
+are never even constructed — so the hot paths stay fast on something like a
+Raspberry Pi. To stream events elsewhere instead, pass any object with an
+`event(category, name, data)` method as `diagnostics`, or give the recorder a
+`sink` callback. `summarizeJob()` and `analyzeInstructions()` complement the
+trace when the question is about the bytes of a job rather than its timing.
+
 ## Fidelity
 
 The port is checked against the Python implementation byte for byte. That includes
@@ -262,15 +307,36 @@ Three behaviours were changed on purpose, because the Python versions are bugs:
 
 ```bash
 npm install
-npm test            # ~1000 tests, including the byte-for-byte golden comparison
+npm test            # ~1100 tests, including the byte-for-byte golden comparison
 npm run test:coverage
+npm run bench       # hot path benchmarks (for comparing before/after on one machine)
 npm run typecheck
 npm run demo:dev    # the demo at http://localhost:5173 (localhost is a secure context)
 ```
 
-Coverage sits near 100% of statements for everything except `src/browser`, which
-is canvas work with no faithful stand-in under Node; that is covered by driving
-the demo in a real browser.
+The suite is built in layers:
+
+- **Golden fixtures** — complete jobs produced by the in-tree Python
+  implementation, compared byte for byte across all 19 models and every
+  optional protocol feature.
+- **Unit tests** for every module, including the browser image adapter, which
+  runs against a deterministic fake canvas under Node.
+- **Integration tests** that walk the whole stack — open, query, convert,
+  transmit, confirm, close — against a scripted USB device and assert on the
+  exact bytes that reached the OUT endpoint, plus failure choreography:
+  errors mid-job, unplugs, stalls, short writes, reconnects.
+- **Deterministic fuzzing** (`test/fuzz*.test.ts`) — every input comes from a
+  seeded PRNG, so runs are reproducible and a failure names the seed that
+  produced it. Codecs are fuzzed for round-trips and against a reference
+  implementation; parsers are fuzzed to be total over arbitrary bytes; the
+  printer state machine is fuzzed against devices that fragment, coalesce,
+  delay, stall, inject junk, error out or fall silent.
+- **Complexity guards** (`test/performance.test.ts`) — generous absolute
+  ceilings, sized so a Raspberry Pi passes easily but an accidental O(n²) in a
+  hot loop fails loudly. Real measurements live in `npm run bench`.
+
+Coverage sits at 100% of statements, functions and lines, and ~98% of branches
+(the rest are defensive arms that well-formed hardware cannot reach).
 
 Regenerating the golden fixtures needs Python and the pinned Pillow:
 

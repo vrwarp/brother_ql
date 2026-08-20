@@ -136,9 +136,9 @@ export function isRasterInstruction(instruction: Instruction): boolean {
  */
 export function rasterRowBytes(instruction: Instruction, compressed: boolean): Uint8Array {
   if (instruction.name === 'zero raster') return new Uint8Array(0);
-  // The payload starts with the length byte(s); the row itself follows.
-  const skip = instruction.name === 'raster P-touch' ? 2 : 2;
-  const row = instruction.payload.subarray(skip);
+  // Two bytes of framing precede the row in every variant: `00 <len>` for QL,
+  // `<colour> <len>` for two colour, `<len lo> <len hi>` for P-touch.
+  const row = instruction.payload.subarray(2);
   return compressed ? packbitsDecode(row) : row;
 }
 

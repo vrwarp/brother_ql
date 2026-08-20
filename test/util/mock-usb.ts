@@ -43,12 +43,24 @@ export interface MockUsbDeviceOptions {
   claimError?: Error;
   /** Rejection thrown by `open`. */
   openError?: Error;
+  /** Rejection thrown by `selectConfiguration`. */
+  selectConfigurationError?: Error;
   /** Called after each `transferOut`; may push more read entries. */
   onWrite?: (chunk: Uint8Array, device: MockUsbDevice) => void;
   /** Make `transferOut` hang, to exercise the write watchdog. */
   hangWrites?: boolean;
   /** Report a stall on the first `transferOut`. */
   stallFirstWrite?: boolean;
+  /** Report a stall on every `transferOut`, modelling a wedged endpoint. */
+  stallAllWrites?: boolean;
+  /** Rejection thrown by `clearHalt`. */
+  clearHaltError?: Error;
+  /** Accept at most this many bytes per `transferOut` (a short write). */
+  maxBytesPerWrite?: number;
+  /** Report success but zero bytes written, modelling a device making no progress. */
+  acceptNothing?: boolean;
+  /** Rejection thrown by `transferOut`, while reads keep working. */
+  writeError?: Error;
   /**
    * Hold back the read script until something has been written.
    *
@@ -170,6 +182,7 @@ export class MockUsbDevice implements MinimalUsbDevice {
   }
 
   async selectConfiguration(configurationValue: number): Promise<void> {
+    if (this.#options.selectConfigurationError) throw this.#options.selectConfigurationError;
     const found = this.#configurations.find((c) => c.configurationValue === configurationValue);
     this.#configuration = found ?? this.#configurations[0] ?? null;
   }
@@ -186,6 +199,7 @@ export class MockUsbDevice implements MinimalUsbDevice {
 
   async clearHalt(direction: USBDirection, endpointNumber: number): Promise<void> {
     this.clearHaltCalls.push({ direction, endpointNumber });
+    if (this.#options.clearHaltError) throw this.#options.clearHaltError;
   }
 
   async transferIn(_endpointNumber: number, _length: number): Promise<USBInTransferResult> {
@@ -228,6 +242,9 @@ export class MockUsbDevice implements MinimalUsbDevice {
   }
 
   async transferOut(_endpointNumber: number, data: BufferSource): Promise<USBOutTransferResult> {
+    // A real device rejects transfers once closed, same as transferIn above.
+    if (!this.#opened) throw new DOMException('The device was closed.', 'NetworkError');
+    if (this.#options.writeError) throw this.#options.writeError;
     if (this.#options.hangWrites) return neverSettles();
 
     const chunk =
@@ -246,13 +263,23 @@ export class MockUsbDevice implements MinimalUsbDevice {
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     this.#writeCount += 1;
-    if (this.#options.stallFirstWrite && this.#writeCount === 1) {
+    if (
+      this.#options.stallAllWrites ||
+      (this.#options.stallFirstWrite && this.#writeCount === 1)
+    ) {
       return { status: 'stall', bytesWritten: 0 } as USBOutTransferResult;
     }
 
-    this.writes.push(chunk);
-    this.#options.onWrite?.(chunk, this);
-    return { status: 'ok', bytesWritten: chunk.length } as USBOutTransferResult;
+    if (this.#options.acceptNothing) {
+      return { status: 'ok', bytesWritten: 0 } as USBOutTransferResult;
+    }
+
+    const max = this.#options.maxBytesPerWrite;
+    const accepted = max !== undefined && max < chunk.length ? chunk.subarray(0, max) : chunk;
+
+    this.writes.push(accepted);
+    this.#options.onWrite?.(accepted, this);
+    return { status: 'ok', bytesWritten: accepted.length } as USBOutTransferResult;
   }
 }
 

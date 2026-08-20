@@ -24,6 +24,13 @@ export function packMirroredPlane(
   if (width % 8 !== 0) {
     throw new RangeError(`Raster width must be a multiple of 8, got ${width}.`);
   }
+  if (plane.length < width * height) {
+    // Reading past the end yields `undefined`, and `undefined !== 0` — a
+    // short plane would fabricate printed dots rather than fail.
+    throw new RangeError(
+      `Plane has ${plane.length} samples but ${width}x${height} needs ${width * height}.`,
+    );
+  }
 
   const rowBytes = width / 8;
   const data = new Uint8Array(rowBytes * height);

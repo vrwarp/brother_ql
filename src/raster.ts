@@ -88,6 +88,20 @@ export class BrotherQLRaster {
     this.#onWarning(message);
   }
 
+  /**
+   * Require an integer within a field's range.
+   *
+   * The Python implementation packs these with `struct.pack`/`bytes([...])`,
+   * which raise on out-of-range values; silently masking here instead would
+   * put a different number on the wire than the caller asked for.
+   */
+  #checkRange(value: number, max: number, what: string): number {
+    if (!Number.isInteger(value) || value < 0 || value > max) {
+      throw new RasterError(`${what} must be an integer between 0 and ${max}, got ${value}.`);
+    }
+    return value;
+  }
+
   /** `ESC @` — reset the printer. */
   addInitialize(): void {
     this.#data.push(0x1b, 0x40);
@@ -129,6 +143,11 @@ export class BrotherQLRaster {
    *   stalls if this disagrees with the rows actually sent.
    */
   addMediaAndQuality(rasterCount: number): void {
+    this.#checkRange(rasterCount, 0xffffffff, 'Raster count');
+    if (this.mtype !== undefined) this.#checkRange(this.mtype, 0xff, 'Media type');
+    if (this.mwidth !== undefined) this.#checkRange(this.mwidth, 0xff, 'Media width');
+    if (this.mlength !== undefined) this.#checkRange(this.mlength, 0xff, 'Media length');
+
     this.#data.push(0x1b, 0x69, 0x7a);
 
     let validFlags = 0x80;
@@ -138,10 +157,10 @@ export class BrotherQLRaster {
     if (this.pquality) validFlags |= 1 << 6;
 
     this.#data.push(validFlags);
-    this.#data.push((this.mtype ?? 0) & 0xff);
-    this.#data.push((this.mwidth ?? 0) & 0xff);
-    this.#data.push((this.mlength ?? 0) & 0xff);
-    this.#data.writeUint32LE(rasterCount >>> 0);
+    this.#data.push(this.mtype ?? 0);
+    this.#data.push(this.mwidth ?? 0);
+    this.#data.push(this.mlength ?? 0);
+    this.#data.writeUint32LE(rasterCount);
     // The "starting page" byte. Upstream tracks a page counter that is never
     // incremented, so this is always zero, including on later pages of a
     // multi-page job; we reproduce that rather than silently changing the wire
@@ -159,11 +178,20 @@ export class BrotherQLRaster {
     this.#data.push(0x1b, 0x69, 0x4d, (autocut ? 1 : 0) << 6);
   }
 
-  /** `ESC i A` — cut after every n-th page. */
+  /**
+   * `ESC i A` — cut after every n-th page.
+   *
+   * An integer is masked to its low byte, exactly as the Python
+   * implementation's `n & 0xFF` does; a non-integer is rejected, as Python's
+   * bitwise-and would reject it too.
+   */
   addCutEvery(n = 1): void {
     if (!this.model.cutting) {
       this.#unsupported("Trying to call addCutEvery with a printer that doesn't support it");
       return;
+    }
+    if (!Number.isInteger(n)) {
+      throw new RasterError(`Cut-every count must be an integer, got ${n}.`);
     }
     this.#data.push(0x1b, 0x69, 0x41, n & 0xff);
   }
@@ -191,8 +219,9 @@ export class BrotherQLRaster {
 
   /** `ESC i d` — feed margin, in dots. */
   addMargins(dots = 0x23): void {
+    this.#checkRange(dots, 0xffff, 'Feed margin');
     this.#data.push(0x1b, 0x69, 0x64);
-    this.#data.writeUint16LE(dots & 0xffff);
+    this.#data.writeUint16LE(dots);
   }
 
   /**
@@ -238,8 +267,24 @@ export class BrotherQLRaster {
         );
       }
     }
-
+    // A BitImage whose fields disagree with each other would not fail here; it
+    // would frame rows read from the wrong offsets, and the printer would
+    // stall on the malformed job. Reject it while it is still explainable.
     const planes = secondImage ? [image, secondImage] : [image];
+    for (const plane of planes) {
+      if (plane.rowBytes * 8 !== plane.width) {
+        throw new RasterError(
+          `Inconsistent BitImage: ${plane.rowBytes} bytes per row cannot hold width ${plane.width}.`,
+        );
+      }
+      if (plane.data.length < plane.rowBytes * plane.height) {
+        throw new RasterError(
+          `Inconsistent BitImage: ${plane.data.length} data bytes for ` +
+            `${plane.height} rows of ${plane.rowBytes} bytes.`,
+        );
+      }
+    }
+
     const rowLength = image.rowBytes;
 
     for (let y = 0; y < image.height; y++) {
@@ -251,10 +296,16 @@ export class BrotherQLRaster {
 
         if (this.model.family === 'PT') {
           // P-touch rows carry a 16 bit little endian length.
+          this.#checkRange(row.length, 0xffff, 'Raster row length');
           this.#data.push(0x47, row.length % 256, Math.floor(row.length / 256));
         } else if (secondImage) {
+          // The length field is a single byte. Every supported QL row fits
+          // even fully expanded by PackBits; this guard is for a hypothetical
+          // future model, where wrapping the length would corrupt the stream.
+          this.#checkRange(row.length, 0xff, 'Raster row length');
           this.#data.push(0x77, planeIndex === 0 ? 0x01 : 0x02, row.length);
         } else {
+          this.#checkRange(row.length, 0xff, 'Raster row length');
           this.#data.push(0x67, 0x00, row.length);
         }
         this.#data.write(row);

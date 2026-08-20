@@ -39,6 +39,7 @@ import {
   StatusTimeoutError,
   UnknownModelError,
 } from './errors.js';
+import type { Tracer } from './diagnostics.js';
 import { TypedEventTarget } from './internal/events.js';
 import { resolveModel, type Model } from './models.js';
 import { tryParseStatus, type PrinterStatus } from './status.js';
@@ -100,6 +101,13 @@ export {
   UnknownModelError,
   type PlatformHint,
 } from './errors.js';
+export {
+  DiagnosticsRecorder,
+  formatTraceEvent,
+  type DiagnosticsRecorderOptions,
+  type TraceEvent,
+  type Tracer,
+} from './diagnostics.js';
 
 export interface PrintProgress {
   phase: 'converting' | 'sending' | 'printing';
@@ -110,9 +118,32 @@ export interface PrintProgress {
 }
 
 export interface PrintResult {
-  /** Pages the printer confirmed. Zero for a non-blocking job. */
+  /**
+   * Pages the printer confirmed. For a non-blocking job only confirmations
+   * that arrived while the job was still being transmitted are counted, which
+   * is usually none.
+   */
   pagesPrinted: number;
   /** The last status packet seen, if any. */
+  lastStatus: PrinterStatus | null;
+}
+
+/**
+ * Mutable confirmation state of one job.
+ *
+ * Created by {@link BrotherQLPrinterCore.startJob} and fed by both the
+ * between-chunks drain and {@link BrotherQLPrinterCore.awaitCompletion}, so a
+ * page confirmed while later pages are still being transmitted is counted
+ * rather than lost.
+ */
+export interface JobProgress {
+  /** How many pages the job carries. */
+  readonly pageCount: number;
+  /** Pages the printer has confirmed so far. */
+  pagesPrinted: number;
+  /** Whether the printer has reported being ready for the next job. */
+  readyForNextJob: boolean;
+  /** The most recent parseable status packet. */
   lastStatus: PrinterStatus | null;
 }
 
@@ -153,10 +184,18 @@ export class BrotherQLPrinterCore extends TypedEventTarget<PrinterEvents> {
   #model: Model | undefined;
   #busy = false;
 
+  /**
+   * The tracer given at construction, if any, for subclasses to report their
+   * own events through. See `diagnostics.ts` — with none attached, call sites
+   * short-circuit before evaluating their arguments.
+   */
+  protected readonly diagnostics: Tracer | undefined;
+
   constructor(device: MinimalUsbDevice, options: PrinterOptions = {}) {
     super();
     this.transport = new UsbTransport(device, options);
     if (options.model) this.#model = resolveModel(options.model);
+    this.diagnostics = options.diagnostics;
 
     this.transport.on('disconnect', () => this.emit('disconnect'));
   }
@@ -261,7 +300,15 @@ export class BrotherQLPrinterCore extends TypedEventTarget<PrinterEvents> {
         if (!status) continue; // ignore anything unparseable and keep waiting
         this.emit('status', status);
         // Progress notifications can arrive first; wait for the actual reply.
-        if (status.statusType === 'reply' || status.statusType === 'error') return status;
+        if (status.statusType === 'reply' || status.statusType === 'error') {
+          this.diagnostics?.event('printer', 'query-status', {
+            statusType: status.statusType,
+            mediaType: status.mediaType,
+            mediaWidthMm: status.mediaWidthMm,
+            errors: status.errors.length,
+          });
+          return status;
+        }
       }
     } finally {
       this.release();
@@ -284,72 +331,97 @@ export class BrotherQLPrinterCore extends TypedEventTarget<PrinterEvents> {
   }
 
   /**
+   * Start tracking a job's confirmations.
+   *
+   * A printer overlaps printing with transmission: on a multi-page job the
+   * first "page completed" packet can arrive while later pages are still being
+   * written. One tracker is therefore shared between the between-chunks drain
+   * and the wait afterwards, so a confirmation is counted wherever it happens
+   * to arrive rather than only after the last byte is out.
+   */
+  protected startJob(pageCount: number): JobProgress {
+    return { pageCount, pagesPrinted: 0, readyForNextJob: false, lastStatus: null };
+  }
+
+  /** Fold one status packet into a job's progress. Throws on printer errors. */
+  #processStatus(
+    progress: JobProgress,
+    status: PrinterStatus,
+    onPageDone?: (pagesPrinted: number) => void,
+  ): void {
+    progress.lastStatus = status;
+    this.emit('status', status);
+
+    if (status.errors.length > 0 || status.statusType === 'error') {
+      this.diagnostics?.event('printer', 'printer-error', {
+        statusType: status.statusType,
+        errors: status.errors.map((flag) => flag.message),
+      });
+      throw new PrinterStatusError(status);
+    }
+
+    if (status.statusType === 'completed') {
+      progress.pagesPrinted += 1;
+      this.diagnostics?.event('printer', 'page-completed', {
+        pagesPrinted: progress.pagesPrinted,
+        pageCount: progress.pageCount,
+      });
+      onPageDone?.(progress.pagesPrinted);
+    }
+
+    if (status.statusType === 'phase-change') {
+      progress.readyForNextJob = status.phaseType === 'waiting';
+    }
+  }
+
+  /**
    * Wait for the printer to confirm every page of a job already on the wire.
    *
    * Shared by `sendRaw` here and `print` in the subclass, because "the bytes
    * are gone, now find out whether they printed" is the same problem either
-   * way and the two must not drift: `print` differs only in reporting progress
-   * and in insisting on a parseable packet.
+   * way and the two must not drift: `print` differs only in reporting
+   * progress.
    */
   protected async awaitCompletion(
-    pageCount: number,
+    progress: JobProgress,
     idleMs: number,
-    seed: PrinterStatus | null,
     onPageDone?: (pagesPrinted: number) => void,
   ): Promise<PrintResult> {
-    let lastStatus = seed;
-    let pagesPrinted = 0;
-    let readyForNextJob = false;
-
-    // The idle timer starts here, after the last byte is out.
-    for (;;) {
-      const packet = await this.takePacket(idleMs, pagesPrinted, idleMs);
+    // Everything may already have been confirmed while the job was still being
+    // written, so the exit condition is checked before waiting, not only after
+    // each packet. The idle timer covers the waiting itself.
+    while (!(progress.pagesPrinted >= progress.pageCount && progress.readyForNextJob)) {
+      const packet = await this.takePacket(idleMs, progress.pagesPrinted, idleMs);
       const status = tryParseStatus(packet);
       // A packet we cannot make sense of is not a reason to abandon a job that
       // may well be printing correctly.
       if (!status) continue;
-
-      lastStatus = status;
-      this.emit('status', status);
-
-      if (status.errors.length > 0 || status.statusType === 'error') {
-        throw new PrinterStatusError(status);
-      }
-
-      if (status.statusType === 'completed') {
-        pagesPrinted += 1;
-        onPageDone?.(pagesPrinted);
-      }
-
-      if (status.statusType === 'phase-change') {
-        readyForNextJob = status.phaseType === 'waiting';
-      }
-
-      if (pagesPrinted >= pageCount && readyForNextJob) break;
+      this.#processStatus(progress, status, onPageDone);
     }
 
-    return { pagesPrinted, lastStatus };
+    this.diagnostics?.event('printer', 'job-done', { pagesPrinted: progress.pagesPrinted });
+    return { pagesPrinted: progress.pagesPrinted, lastStatus: progress.lastStatus };
   }
 
   /**
-   * Drain everything the printer has said and throw if any of it is an error.
+   * Fold everything the printer has said so far into the job's progress and
+   * throw if any of it is an error.
    *
    * Passed to `transport.write` as its between-chunks hook so a job stops
    * promptly instead of after every byte has been pushed at a printer that
-   * cannot print them.
+   * cannot print them. Page confirmations arriving this early are counted, not
+   * discarded — see {@link startJob}.
    */
-  protected drainForErrors(): PrinterStatus | null {
-    let lastStatus: PrinterStatus | null = null;
+  protected drainForErrors(
+    progress: JobProgress,
+    onPageDone?: (pagesPrinted: number) => void,
+  ): void {
     for (;;) {
       const packet = this.transport.statusQueue.tryTake();
-      if (!packet) return lastStatus;
+      if (!packet) return;
       const status = tryParseStatus(packet);
       if (!status) continue;
-      lastStatus = status;
-      this.emit('status', status);
-      if (status.errors.length > 0 || status.statusType === 'error') {
-        throw new PrinterStatusError(status);
-      }
+      this.#processStatus(progress, status, onPageDone);
     }
   }
 
@@ -360,23 +432,46 @@ export class BrotherQLPrinterCore extends TypedEventTarget<PrinterEvents> {
   async sendRaw(instructions: Uint8Array, options: SendRawOptions = {}): Promise<PrintResult> {
     this.acquire();
     try {
-      const pageCount = options.pageCount ?? 1;
+      // A non-finite page count would make the completion condition
+      // unsatisfiable and burn the whole idle timeout; treat it like the
+      // default, the same way print() treats a non-finite copies count.
+      const requestedPages = options.pageCount ?? 1;
+      const pageCount = Number.isFinite(requestedPages)
+        ? Math.max(0, Math.floor(requestedPages))
+        : 1;
       const idleMs = options.statusTimeoutMs ?? 10_000;
       this.transport.statusQueue.clear();
 
-      await this.transport.write(instructions, (bytesSent, bytesTotal) =>
-        options.onProgress?.({
-          phase: 'sending',
-          bytesSent,
-          bytesTotal,
-          pagesCompleted: 0,
-          pageCount,
-        }),
+      this.diagnostics?.event('printer', 'send-start', {
+        bytes: instructions.length,
+        pageCount,
+        nonBlocking: options.nonBlocking ?? false,
+      });
+
+      // Anything the printer says while the job is still going out is folded
+      // into the job's progress between chunks, so a printer that cannot print
+      // stops the job promptly instead of receiving every remaining byte
+      // first, and an early page confirmation is counted rather than lost.
+      const progress = this.startJob(pageCount);
+
+      await this.transport.write(
+        instructions,
+        (bytesSent, bytesTotal) =>
+          options.onProgress?.({
+            phase: 'sending',
+            bytesSent,
+            bytesTotal,
+            pagesCompleted: progress.pagesPrinted,
+            pageCount,
+          }),
+        () => this.drainForErrors(progress),
       );
 
-      if (options.nonBlocking) return { pagesPrinted: 0, lastStatus: null };
+      if (options.nonBlocking) {
+        return { pagesPrinted: progress.pagesPrinted, lastStatus: progress.lastStatus };
+      }
 
-      return await this.awaitCompletion(pageCount, idleMs, null);
+      return await this.awaitCompletion(progress, idleMs);
     } finally {
       this.release();
     }

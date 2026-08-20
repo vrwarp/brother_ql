@@ -17,6 +17,22 @@ export interface RawImage {
 }
 
 /**
+ * Reject a hand-built image whose buffer disagrees with its dimensions.
+ *
+ * Reading past the end of a typed array yields `undefined`, which the
+ * arithmetic below would quietly turn into zero samples — garbage in the
+ * output with nothing pointing back at the mistake.
+ */
+function requireConsistent(img: RawImage, where: string): void {
+  if (img.data.length !== img.width * img.height * 4) {
+    throw new RangeError(
+      `${where}: image data is ${img.data.length} bytes but ${img.width}x${img.height} ` +
+        `RGBA needs ${img.width * img.height * 4}.`,
+    );
+  }
+}
+
+/**
  * A one-bit-per-pixel image in the printer's own layout: rows are packed
  * most significant bit first, and a set bit means "burn this dot".
  */
@@ -49,8 +65,21 @@ export function createWhiteImage(width: number, height: number): RawImage {
  *
  * Alpha is copied verbatim rather than blended, matching the way
  * `conversion.py` pastes an already-composited image onto its white canvas.
+ *
+ * Rows that fall above or below the destination are clipped. Horizontally the
+ * paste must fit: pixel rows are laid out contiguously, so a paste crossing
+ * the left or right edge would not clip, it would wrap into the neighbouring
+ * row — silent corruption, and so rejected instead.
  */
 export function pasteImage(dst: RawImage, src: RawImage, x: number, y: number): void {
+  requireConsistent(dst, 'pasteImage (destination)');
+  requireConsistent(src, 'pasteImage (source)');
+  if (!Number.isInteger(x) || x < 0 || x + src.width > dst.width) {
+    throw new RangeError(
+      `Cannot paste a ${src.width} pixel wide image at x=${x} into a ` +
+        `${dst.width} pixel wide image.`,
+    );
+  }
   const rowBytes = src.width * 4;
   for (let row = 0; row < src.height; row++) {
     const dstY = y + row;
@@ -72,6 +101,7 @@ export type RotationAngle = 0 | 90 | 180 | 270;
  * any resampling.
  */
 export function rotateRawImage(img: RawImage, degrees: RotationAngle): RawImage {
+  requireConsistent(img, 'rotateRawImage');
   if (degrees === 0) return img;
 
   const { width: w, height: h, data } = img;
@@ -116,6 +146,7 @@ export function rotateRawImage(img: RawImage, degrees: RotationAngle): RawImage 
  * implementation for non-uniform images.
  */
 export function halveWidth(img: RawImage): RawImage {
+  requireConsistent(img, 'halveWidth');
   const outWidth = Math.floor(img.width / 2);
   const out = new Uint8Array(outWidth * img.height * 4);
   for (let y = 0; y < img.height; y++) {
@@ -142,6 +173,13 @@ export function createBitImage(width: number, height: number): BitImage {
 
 /** Read a single dot; `true` means the dot is printed. */
 export function getBit(image: BitImage, x: number, y: number): boolean {
+  if (x < 0 || x >= image.width || y < 0 || y >= image.height) {
+    // Out of range used to read `undefined` and coerce it to "not printed",
+    // which hid off-by-one mistakes in callers instead of reporting them.
+    throw new RangeError(
+      `getBit(${x}, ${y}) is outside the ${image.width}x${image.height} image.`,
+    );
+  }
   const byte = image.data[y * image.rowBytes + (x >> 3)] as number;
   return (byte & (0x80 >> (x & 7))) !== 0;
 }

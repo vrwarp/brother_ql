@@ -64,6 +64,7 @@
     "lint": "eslint .",
     "test": "vitest run",
     "test:watch": "vitest",
+    "bench": "vitest bench --run",
     "fixtures": "python3 scripts/generate_fixtures.py",
     "fixtures:check": "python3 scripts/generate_fixtures.py --check",
     "demo:dev": "vite --config demo/vite.config.ts",
