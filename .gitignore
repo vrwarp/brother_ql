@@ -64,3 +64,8 @@ demo/dist/
 npm-debug.log*
 .DS_Store
 coverage/
+
+# Mutation testing (StrykerJS)
+reports/
+.stryker-tmp/
+stryker.log

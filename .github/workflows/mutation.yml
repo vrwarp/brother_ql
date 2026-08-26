@@ -1,0 +1,51 @@
+name: Mutation testing
+
+# A full run rewrites every operator, literal and branch in src/ one at a time
+# and re-runs the suite against each — thousands of test runs, tens of minutes
+# of machine time. That is too slow to gate every push, so it runs weekly and
+# on demand, and `npm test` stays the fast gate.
+on:
+  schedule:
+    # Mondays, 04:00 UTC.
+    - cron: '0 4 * * 1'
+  workflow_dispatch:
+    inputs:
+      mutate:
+        description: 'Limit to some files, e.g. src/raster.ts,src/convert.ts'
+        required: false
+        type: string
+
+jobs:
+  mutation:
+    name: StrykerJS
+    runs-on: ubuntu-latest
+    # The full sweep is long. The ceiling is generous rather than tight so a
+    # slow runner reports a score instead of a cancellation.
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      # The mutation score is only meaningful if the suite passes to begin
+      # with: Stryker aborts on a failing initial test run, but failing here
+      # says why in seconds instead of after the dry run.
+      - run: npm test
+
+      - name: Run mutation testing
+        run: npm run mutation ${{ inputs.mutate && format('-- --mutate {0}', inputs.mutate) || '' }}
+
+      # The HTML report is how a survivor is actually read: it shows each
+      # mutant in place in the source, with the tests that covered it.
+      - name: Upload the mutation report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mutation-report
+          path: reports/mutation/
+          retention-days: 30
