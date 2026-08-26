@@ -17,10 +17,29 @@ export class ByteWriter {
     return this.#length;
   }
 
+  /**
+   * Bytes that fit before the next reallocation.
+   *
+   * Exposed because amortised growth is the whole point of this class: a
+   * raster builder that reallocated per row would copy the job once per raster
+   * line. Nothing outside needs to read it, but it is the only way to observe
+   * that the growth policy still holds.
+   */
+  get capacity(): number {
+    return this.#buffer.length;
+  }
+
   #ensure(extra: number): void {
     const required = this.#length + extra;
+    // Stryker disable next-line EqualityOperator,ConditionalExpression: both
+    // mutants (`<` and a constant false) only drop the early return when the
+    // write exactly fills the buffer. The loop below then leaves the capacity
+    // where it is, so the difference is one wasted allocation and copy and
+    // nothing an observer of this class can see.
     if (required <= this.#buffer.length) return;
-    let capacity = this.#buffer.length * 2;
+    // Doubling from the current size, not from twice it: the loop always runs
+    // at least once here, since `required` is already past the current size.
+    let capacity = this.#buffer.length;
     while (capacity < required) capacity *= 2;
     const grown = new Uint8Array(capacity);
     grown.set(this.#buffer.subarray(0, this.#length));
