@@ -128,6 +128,22 @@ describe('error detail', () => {
     expect(error.actual).toBeUndefined();
   });
 
+  it('carries the underlying failure that caused a disconnect', () => {
+    // The DOMException a failed transfer rejects with is the only thing that
+    // says *how* the device went away; the wrapper exists to add a name, not
+    // to replace it.
+    const cause = new DOMException('The device was disconnected.', 'NetworkError');
+    expect(new DeviceDisconnectedError(cause).cause).toBe(cause);
+    expect(new DeviceDisconnectedError().cause).toBeUndefined();
+  });
+
+  it('separates several printer errors so each is readable', () => {
+    const status = parseStatus(makeStatusPacket({ errorInfo1: 0x05 }));
+    expect(new PrinterStatusError(status).message).toBe(
+      'The printer reported an error: No media when printing; Tape cutter jam.',
+    );
+  });
+
   it('names the offending identifier in lookup failures', () => {
     expect(new UnknownModelError('QL-9999').message).toContain('QL-9999');
     expect(new UnknownLabelError('99x99').message).toContain('99x99');

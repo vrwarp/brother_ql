@@ -25,7 +25,7 @@ import {
 import { getModel, modelIdentifiers, resolveModel } from '../src/models.js';
 import { BrotherQLPrinter } from '../src/printer.js';
 import { BrotherQLRaster } from '../src/raster.js';
-import { AsyncQueue } from '../src/usb/async-queue.js';
+import { AsyncQueue, QueueTimeoutError } from '../src/usb/async-queue.js';
 import { detectPlatform, UsbTransport } from '../src/usb/transport.js';
 import {
   MockUsbDevice,
@@ -93,6 +93,85 @@ describe('AsyncQueue cancellation', () => {
     const pending = queue.take({ timeoutMs: 10_000, signal: controller.signal });
     controller.abort();
     await expect(pending).rejects.toThrow(/Aborted/);
+  });
+
+  it('resolves normally while a signal is merely watching', async () => {
+    const queue = new AsyncQueue<number>();
+    const pending = queue.take({ signal: new AbortController().signal });
+    queue.push(9);
+    await expect(pending).resolves.toBe(9);
+  });
+
+  it('waits indefinitely when no timeout is given', async () => {
+    // Not just "resolves when pushed" — the push has to happen after the event
+    // loop has turned, or a timer armed with an undefined delay (which fires
+    // on the next tick) would look identical to no timer at all.
+    const queue = new AsyncQueue<number>();
+    const pending = queue.take();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    queue.push(7);
+    await expect(pending).resolves.toBe(7);
+  });
+
+  it('names the timeout error so a caller can branch on it', () => {
+    const error = new QueueTimeoutError(250);
+    expect(error.name).toBe('QueueTimeoutError');
+    expect(error.message).toMatch(/250 ms/);
+  });
+});
+
+describe('AsyncQueue waiter housekeeping', () => {
+  /**
+   * A settled waiter has to be taken back out of the queue's list. If it is
+   * not, the next `push` hands its item to a promise that has already
+   * resolved — the item is not queued, not delivered, and the next `take`
+   * waits for a value that will never arrive.
+   */
+  it('does not let a settled waiter swallow the next item', async () => {
+    const queue = new AsyncQueue<number>();
+    const first = queue.take();
+    queue.push(1);
+    await expect(first).resolves.toBe(1);
+
+    queue.push(2);
+    expect(queue.size).toBe(1);
+    await expect(queue.take({ timeoutMs: 100 })).resolves.toBe(2);
+  });
+
+  it('clears its timeout timer once the value arrives', () => {
+    vi.useFakeTimers();
+    try {
+      const queue = new AsyncQueue<number>();
+      void queue.take({ timeoutMs: 10_000 });
+      expect(vi.getTimerCount()).toBe(1);
+      queue.push(1);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('removes its abort listener once the value arrives', async () => {
+    // A caller can reuse one signal across many takes — the transport does —
+    // so a listener left behind on each is an unbounded leak.
+    const added: Array<[string, EventListener]> = [];
+    const removed: Array<[string, EventListener]> = [];
+    const signal = {
+      aborted: false,
+      addEventListener: (type: string, listener: EventListener) => added.push([type, listener]),
+      removeEventListener: (type: string, listener: EventListener) =>
+        removed.push([type, listener]),
+    } as unknown as AbortSignal;
+
+    const queue = new AsyncQueue<number>();
+    const pending = queue.take({ signal });
+    queue.push(4);
+    await expect(pending).resolves.toBe(4);
+
+    expect(added).toHaveLength(1);
+    expect(removed).toHaveLength(1);
+    expect(removed[0]?.[0]).toBe('abort');
+    expect(removed[0]?.[1]).toBe(added[0]?.[1]);
   });
 });
 

@@ -66,23 +66,29 @@ export class AsyncQueue<T> {
     if (this.#failure) return Promise.reject(this.#failure);
 
     return new Promise<T>((resolve, reject) => {
-      const waiter: Waiter<T> = { resolve, reject };
-
       let timer: ReturnType<typeof setTimeout> | undefined;
+
+      // Settling has to undo everything this waiter set up, or the leftovers
+      // outlive it: a timer that keeps the event loop alive, an abort listener
+      // on a signal the caller may reuse, and — worst — an entry still in
+      // `#waiters`, which the next `push` would hand its item to and lose.
+      // `clearTimeout(undefined)` is a defined no-op, so no guard is needed.
       const cleanup = (): void => {
-        if (timer !== undefined) clearTimeout(timer);
+        clearTimeout(timer);
         options.signal?.removeEventListener('abort', onAbort);
         const index = this.#waiters.indexOf(waiter);
         if (index !== -1) this.#waiters.splice(index, 1);
       };
 
-      waiter.resolve = (value: T): void => {
-        cleanup();
-        resolve(value);
-      };
-      waiter.reject = (error: Error): void => {
-        cleanup();
-        reject(error);
+      const waiter: Waiter<T> = {
+        resolve: (value: T): void => {
+          cleanup();
+          resolve(value);
+        },
+        reject: (error: Error): void => {
+          cleanup();
+          reject(error);
+        },
       };
 
       function onAbort(): void {
@@ -94,7 +100,9 @@ export class AsyncQueue<T> {
           reject(new Error('Aborted while waiting for data.'));
           return;
         }
-        options.signal.addEventListener('abort', onAbort, { once: true });
+        // No `{ once: true }`: `cleanup` removes this listener on every path
+        // out, so the flag would only ever be redundant.
+        options.signal.addEventListener('abort', onAbort);
       }
 
       if (options.timeoutMs !== undefined) {
