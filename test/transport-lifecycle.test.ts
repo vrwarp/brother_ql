@@ -68,11 +68,14 @@ describe('opening', () => {
   });
 
   it('does not claim the device twice when opened twice', async () => {
+    // A second claim would also start a second reader loop, and two readers
+    // racing for one IN endpoint lose packets to each other.
     const device = new MockUsbDevice();
     const transport = new UsbTransport(device);
     await transport.open();
     await transport.open();
     expect(device.openCount).toBe(1);
+    expect(device.claimCount).toBe(1);
     expect(device.selectedConfigurations).toHaveLength(1);
     await transport.close();
   });
@@ -82,7 +85,23 @@ describe('opening', () => {
     const transport = new UsbTransport(device);
     await Promise.all([transport.open(), transport.open(), transport.open()]);
     expect(device.openCount).toBe(1);
+    expect(device.claimCount).toBe(1);
     expect(device.selectedConfigurations).toHaveLength(1);
+    await transport.close();
+  });
+
+  it('tears down after a read disconnect before reopening', async () => {
+    const device = new MockUsbDevice({ readScript: [{ kind: 'disconnect' }] });
+    const transport = new UsbTransport(device);
+    await transport.open();
+    await expect(transport.statusQueue.take({ timeoutMs: 500 })).rejects.toThrow(
+      DeviceDisconnectedError,
+    );
+
+    const closesAfterDisconnect = device.closeCount;
+    await transport.open();
+    expect(device.closeCount).toBeGreaterThan(closesAfterDisconnect);
+    expect(transport.opened).toBe(true);
     await transport.close();
   });
 
@@ -151,8 +170,10 @@ describe('opening', () => {
     const transport = new UsbTransport(device);
     await transport.open();
     await transport.write(JOB);
-    // The bulk OUT endpoint is 2; an interrupt one would have been 5.
-    expect(device.writes).toHaveLength(1);
+    // The bulk endpoints are 1 and 2; the interrupt ones come first in the
+    // list and are numbered 5 and 6, so picking by position would show here.
+    expect(device.writeEndpoints).toEqual([2]);
+    expect(new Set(device.readEndpoints)).toEqual(new Set([1]));
     await expect(transport.statusQueue.take({ timeoutMs: 500 })).resolves.toBeDefined();
     await transport.close();
   });
@@ -200,16 +221,24 @@ describe('reading', () => {
   });
 
   it('ignores a transfer that carries no data', async () => {
-    const device = new MockUsbDevice({
-      readScript: [
-        { kind: 'data', bytes: new Uint8Array(0) },
-        { kind: 'data', bytes: STATUS_REPLY },
-      ],
-    });
-    const transport = new UsbTransport(device);
-    await transport.open();
-    await expect(transport.statusQueue.take({ timeoutMs: 500 })).resolves.toHaveLength(32);
-    await transport.close();
+    // Both shapes a completed-but-empty transfer takes: an empty buffer, and
+    // no buffer at all. The second would be a TypeError without the guard,
+    // which kills the reader and with it every later packet.
+    for (const first of [
+      { kind: 'data', bytes: new Uint8Array(0) } as const,
+      { kind: 'empty' } as const,
+    ]) {
+      const device = new MockUsbDevice({
+        readScript: [first, { kind: 'data', bytes: STATUS_REPLY }],
+      });
+      const transport = new UsbTransport(device);
+      await transport.open();
+      await expect(
+        transport.statusQueue.take({ timeoutMs: 500 }),
+        first.kind,
+      ).resolves.toHaveLength(32);
+      await transport.close();
+    }
   });
 
   it('resynchronises on all three header bytes, not just the first', async () => {
@@ -298,33 +327,122 @@ describe('closing', () => {
     await expect(pending).rejects.toThrow(DeviceDisconnectedError);
   });
 
-  it('leaves no timer behind', async () => {
-    // The cap on waiting for the reader outlives the close if it is not
-    // cleared, which keeps a Node process alive after everything is done.
-    const device = new MockUsbDevice({ readScript: [{ kind: 'silence' }] });
+  it('waits for the reader to stop before reporting itself closed', async () => {
+    // The reader owns the IN endpoint. Returning from close() while it is
+    // still parked on a transfer means a reopen can start a second one.
+    const device = new MockUsbDevice({
+      readScript: [{ kind: 'delay', ms: 60 }, { kind: 'data', bytes: STATUS_REPLY }],
+    });
     const transport = new UsbTransport(device);
     await transport.open();
-    await transport.close();
+    // Let the reader park inside the delay.
     await new Promise((resolve) => setTimeout(resolve, 5));
 
-    vi.useFakeTimers();
-    expect(vi.getTimerCount()).toBe(0);
+    const started = Date.now();
+    await transport.close();
+    expect(Date.now() - started).toBeGreaterThanOrEqual(30);
+  });
+
+  it('gives up on a reader that never unparks', async () => {
+    // A real device rejects a parked transfer when it closes; one that does
+    // not must still not hang the caller for ever.
+    const device = new MockUsbDevice({
+      ignoreCloseForReads: true,
+      readScript: [{ kind: 'silence' }],
+    });
+    const transport = new UsbTransport(device);
+    await transport.open();
+
+    const started = Date.now();
+    await transport.close();
+    const elapsed = Date.now() - started;
+    expect(elapsed).toBeGreaterThanOrEqual(1500);
+    expect(elapsed).toBeLessThan(10_000);
+    expect(transport.opened).toBe(false);
+  });
+
+  it('does not release an interface the device already took back', async () => {
+    // A write timeout closes the device from under the transport, so the
+    // interface is gone with it; asking to release it again is a call the
+    // device answers with an error nobody can act on.
+    const device = new MockUsbDevice({ hangWrites: true });
+    const transport = new UsbTransport(device, { writeChunkTimeoutMs: 20 });
+    await transport.open();
+    await expect(transport.write(JOB)).rejects.toThrow(TransferTimeoutError);
+
+    await transport.close();
+    expect(device.releaseCount).toBe(0);
+  });
+
+  it('clears the cap it put on waiting for the reader', async () => {
+    // The cap is a two second timer. Left armed it outlives the close, which
+    // keeps a Node process alive long after everything is done — and in a
+    // browser holds the transport from collection.
+    const armed = new Set<unknown>();
+    const cleared = new Set<unknown>();
+    const realSetTimeout = globalThis.setTimeout;
+    const realClearTimeout = globalThis.clearTimeout;
+    vi.spyOn(globalThis, 'setTimeout').mockImplementation(((
+      handler: () => void,
+      ms?: number,
+    ): unknown => {
+      const handle = realSetTimeout(handler, ms);
+      if (ms === 2000) armed.add(handle);
+      return handle;
+    }) as typeof globalThis.setTimeout);
+    vi.spyOn(globalThis, 'clearTimeout').mockImplementation(((handle: unknown): void => {
+      cleared.add(handle);
+      realClearTimeout(handle as ReturnType<typeof setTimeout>);
+    }) as typeof globalThis.clearTimeout);
+
+    try {
+      const device = new MockUsbDevice({ readScript: [{ kind: 'silence' }] });
+      const transport = new UsbTransport(device);
+      await transport.open();
+      await transport.close();
+
+      expect(armed.size).toBe(1);
+      for (const handle of armed) expect(cleared.has(handle)).toBe(true);
+    } finally {
+      vi.restoreAllMocks();
+    }
   });
 });
 
 describe('writing', () => {
   it('clears its watchdog once a chunk lands', async () => {
-    const device = new MockUsbDevice();
-    const transport = new UsbTransport(device, { chunkSize: 1, writeChunkTimeoutMs: 30_000 });
-    await transport.open();
-    await transport.write(JOB);
+    // One watchdog per chunk, each armed for 30 s. Left running they keep a
+    // Node process alive long after the job finished, and in a browser they
+    // hold the transport — and the whole job's buffer — from collection.
+    const armed = new Set<unknown>();
+    const cleared = new Set<unknown>();
+    const realSetTimeout = globalThis.setTimeout;
+    const realClearTimeout = globalThis.clearTimeout;
+    vi.spyOn(globalThis, 'setTimeout').mockImplementation(((
+      handler: () => void,
+      ms?: number,
+    ): unknown => {
+      const handle = realSetTimeout(handler, ms);
+      if (ms === 30_000) armed.add(handle);
+      return handle;
+    }) as typeof globalThis.setTimeout);
+    vi.spyOn(globalThis, 'clearTimeout').mockImplementation(((handle: unknown): void => {
+      cleared.add(handle);
+      realClearTimeout(handle as ReturnType<typeof setTimeout>);
+    }) as typeof globalThis.clearTimeout);
 
-    // One watchdog per chunk, all of them armed for 30 s: if they were not
-    // cleared, three would still be pending here.
-    vi.useFakeTimers();
-    expect(vi.getTimerCount()).toBe(0);
-    vi.useRealTimers();
-    await transport.close();
+    try {
+      const device = new MockUsbDevice();
+      const transport = new UsbTransport(device, { chunkSize: 1, writeChunkTimeoutMs: 30_000 });
+      await transport.open();
+      await transport.write(JOB);
+      await transport.close();
+
+      expect(armed.size, 'one watchdog per chunk').toBe(3);
+      for (const handle of armed) expect(cleared.has(handle)).toBe(true);
+    } finally {
+      vi.restoreAllMocks();
+    }
   });
 
   it('fails waiting readers when a write times out', async () => {

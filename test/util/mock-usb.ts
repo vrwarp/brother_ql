@@ -24,6 +24,8 @@ export interface MockInterface {
 /** One scripted reply from the IN endpoint. */
 export type ReadScriptEntry =
   | { kind: 'data'; bytes: Uint8Array }
+  /** Completes successfully but carries no buffer at all, as a real one can. */
+  | { kind: 'empty' }
   | { kind: 'stall' }
   | { kind: 'delay'; ms: number }
   /** Never completes, modelling a printer that has gone quiet. */
@@ -76,6 +78,13 @@ export interface MockUsbDeviceOptions {
   noConfigurations?: boolean;
   /** The value the single configuration reports. Defaults to 1. */
   configurationValue?: number;
+  /**
+   * Keep parked reads parked when the device is closed.
+   *
+   * A real device rejects them, which is what ends the reader loop; this
+   * models the misbehaving one the close path caps its wait for.
+   */
+  ignoreCloseForReads?: boolean;
 }
 
 const DEFAULT_INTERFACES: MockInterface[] = [
@@ -102,7 +111,12 @@ export class MockUsbDevice implements MinimalUsbDevice {
   releaseCount = 0;
   closeCount = 0;
   openCount = 0;
+  claimCount = 0;
   clearHaltCalls: Array<{ direction: string; endpointNumber: number }> = [];
+  /** Endpoint numbers `transferIn` was called on, in order. */
+  readonly readEndpoints: number[] = [];
+  /** Endpoint numbers `transferOut` was called on, in order. */
+  readonly writeEndpoints: number[] = [];
   /** Configuration values passed to `selectConfiguration`, in order. */
   readonly selectedConfigurations: number[] = [];
   /** Lengths requested by `transferIn`, in order. */
@@ -214,6 +228,7 @@ export class MockUsbDevice implements MinimalUsbDevice {
   }
 
   async claimInterface(interfaceNumber: number): Promise<void> {
+    this.claimCount += 1;
     if (this.#options.claimError) throw this.#options.claimError;
     this.claimed.add(interfaceNumber);
   }
@@ -228,12 +243,15 @@ export class MockUsbDevice implements MinimalUsbDevice {
     if (this.#options.clearHaltError) throw this.#options.clearHaltError;
   }
 
-  async transferIn(_endpointNumber: number, length: number): Promise<USBInTransferResult> {
+  async transferIn(endpointNumber: number, length: number): Promise<USBInTransferResult> {
     this.readLengths.push(length);
+    this.readEndpoints.push(endpointNumber);
     for (;;) {
       // Closing a real device rejects any transfer that is parked on it, which
       // is what lets the transport's reader loop terminate.
-      if (!this.#opened) throw new DOMException('The device was closed.', 'NetworkError');
+      if (!this.#opened && !this.#options.ignoreCloseForReads) {
+        throw new DOMException('The device was closed.', 'NetworkError');
+      }
 
       if (this.#options.deferReadsUntilWrite && this.#writeCount === 0) {
         await this.#waitForRead();
@@ -251,6 +269,8 @@ export class MockUsbDevice implements MinimalUsbDevice {
       switch (entry.kind) {
         case 'data':
           return { status: 'ok', data: toDataView(entry.bytes) } as USBInTransferResult;
+        case 'empty':
+          return { status: 'ok', data: undefined } as unknown as USBInTransferResult;
         case 'stall':
           return { status: 'stall', data: undefined } as unknown as USBInTransferResult;
         case 'delay':
@@ -268,7 +288,8 @@ export class MockUsbDevice implements MinimalUsbDevice {
     }
   }
 
-  async transferOut(_endpointNumber: number, data: BufferSource): Promise<USBOutTransferResult> {
+  async transferOut(endpointNumber: number, data: BufferSource): Promise<USBOutTransferResult> {
+    this.writeEndpoints.push(endpointNumber);
     // A real device rejects transfers once closed, same as transferIn above.
     if (!this.#opened) throw new DOMException('The device was closed.', 'NetworkError');
     if (this.#options.writeError) throw this.#options.writeError;

@@ -106,7 +106,9 @@ describe('failures on the way in', () => {
     const transport = new UsbTransport(device, { diagnostics });
 
     await expect(transport.open()).rejects.toThrow(/Could not select the printer's USB/);
-    const failed = diagnostics.events().find((e) => e.name === 'open-failed');
+    const failed = diagnostics
+      .events()
+      .find((e) => e.category === 'transport' && e.name === 'open-failed');
     expect(failed?.data).toEqual({ step: 'select-configuration', error: 'Error: busy' });
     expect(find).toBeDefined();
   });
@@ -154,7 +156,9 @@ describe('failures mid-session', () => {
     await transport.write(JOB);
     await transport.close();
 
-    const stall = diagnostics.events().find((e) => e.name === 'stall');
+    const stall = diagnostics
+      .events()
+      .find((e) => e.category === 'transport' && e.name === 'stall');
     expect(stall?.data).toEqual({ direction: 'out', at: 0 });
     expect(find).toBeDefined();
   });
@@ -168,8 +172,15 @@ describe('failures mid-session', () => {
     await transport.write(JOB);
     await transport.close();
 
-    const short = diagnostics.events().find((e) => e.name === 'short-write');
+    const short = diagnostics
+      .events()
+      .find((e) => e.category === 'transport' && e.name === 'short-write');
     expect(short?.data).toEqual({ expected: 3, written: 2 });
+
+    // The chunk event reports what the device took, not what was offered.
+    const chunks = diagnostics.events().filter((e) => e.name === 'write-chunk');
+    expect(chunks.map((e) => e.data?.size)).toEqual([2, 1]);
+    expect(diagnostics.events().every((e) => e.category === 'transport')).toBe(true);
   });
 
   it('says nothing about a short write when the whole chunk went out', async () => {
@@ -192,7 +203,9 @@ describe('failures mid-session', () => {
     await transport.open();
     await expect(transport.write(JOB)).rejects.toThrow(/Timed out writing/);
 
-    const timeout = diagnostics.events().find((e) => e.name === 'write-timeout');
+    const timeout = diagnostics
+      .events()
+      .find((e) => e.category === 'transport' && e.name === 'write-timeout');
     expect(timeout?.data).toEqual({ sent: 0, total: 3 });
   });
 
@@ -205,7 +218,9 @@ describe('failures mid-session', () => {
     await writing.open();
     await expect(writing.write(JOB)).rejects.toThrow(DeviceDisconnectedError);
     expect(
-      writeDiagnostics.events().find((e) => e.name === 'disconnect')?.data,
+      writeDiagnostics
+        .events()
+        .find((e) => e.category === 'transport' && e.name === 'disconnect')?.data,
     ).toEqual({ during: 'write', error: 'Error: gone' });
     await writing.close();
 
@@ -218,7 +233,9 @@ describe('failures mid-session', () => {
     await expect(reading.statusQueue.take({ timeoutMs: 500 })).rejects.toThrow(
       DeviceDisconnectedError,
     );
-    const event = readDiagnostics.events().find((e) => e.name === 'disconnect');
+    const event = readDiagnostics
+      .events()
+      .find((e) => e.category === 'transport' && e.name === 'disconnect');
     expect(event?.data?.during).toBe('read');
     expect(String(event?.data?.error)).toMatch(/disconnected/);
     await reading.close();

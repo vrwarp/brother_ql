@@ -80,6 +80,19 @@ describe('per-platform claim advice', () => {
     });
   }
 
+  it('is unknown in an environment with no navigator declared at all', () => {
+    // Not `navigator === undefined` — genuinely absent, as it is under older
+    // Node and in a Web Worker without the global. Reading it there is a
+    // ReferenceError, which the typeof guard is what avoids.
+    const descriptor = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
+    delete (globalThis as { navigator?: unknown }).navigator;
+    try {
+      expect(detectPlatform()).toBe('unknown');
+    } finally {
+      if (descriptor) Object.defineProperty(globalThis, 'navigator', descriptor);
+    }
+  });
+
   it('names the platform it guessed from the user agent alone', () => {
     // `navigator.platform` is deprecated and empty in some browsers, so the
     // user agent has to carry the guess on its own — and vice versa for older
