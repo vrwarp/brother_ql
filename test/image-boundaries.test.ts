@@ -13,6 +13,7 @@ import { describe, expect, it } from 'vitest';
 
 import { clip8 } from '../src/image/clip.js';
 import { compositeOnWhite, rgbToGray } from '../src/image/grayscale.js';
+import { halveWidth, pasteImage, rotateRawImage } from '../src/image/raw-image.js';
 import { splitRedBlack } from '../src/image/red-black.js';
 import { computeThreshold } from '../src/image/threshold.js';
 import type { RawImage } from '../src/image/raw-image.js';
@@ -154,5 +155,65 @@ describe('compositing shortcuts', () => {
         blendOntoWhite(200, 37, 91, alpha),
       );
     }
+  });
+});
+
+describe('paste geometry', () => {
+  /**
+   * Pixel rows are laid out contiguously, so a paste that runs off the left or
+   * right edge does not clip — it wraps into the neighbouring row. That is
+   * silent corruption, so it is rejected; vertically there is no such hazard,
+   * so rows outside the canvas are simply skipped. Each rejection below is
+   * asserted through its message, because every one of these mistakes also
+   * makes `TypedArray.set` throw a RangeError of its own further down, which a
+   * bare `toThrow(RangeError)` cannot tell apart from the guard doing its job.
+   */
+  function canvas(width: number, height: number): RawImage {
+    return { width, height, data: new Uint8Array(width * height * 4) };
+  }
+
+  function filled(width: number, height: number, value: number): RawImage {
+    return { width, height, data: new Uint8Array(width * height * 4).fill(value) };
+  }
+
+  it('rejects a fractional x offset', () => {
+    expect(() => pasteImage(canvas(8, 2), filled(4, 1, 0xab), 0.5, 0)).toThrow(
+      /Cannot paste a 4 pixel wide image at x=0\.5 into a 8 pixel wide image\./,
+    );
+  });
+
+  it('rejects a negative x offset by name, not by an incidental RangeError', () => {
+    expect(() => pasteImage(canvas(8, 2), filled(4, 1, 0xab), -1, 0)).toThrow(
+      /Cannot paste a 4 pixel wide image at x=-1 into a 8 pixel wide image\./,
+    );
+  });
+
+  it('rejects a paste that would wrap into the following row', () => {
+    // Room enough in the buffer for `set` to succeed, which is exactly why the
+    // guard has to catch it: the bytes would land in row 1.
+    expect(() => pasteImage(canvas(8, 2), filled(4, 1, 0xab), 6, 0)).toThrow(
+      /Cannot paste a 4 pixel wide image at x=6 into a 8 pixel wide image\./,
+    );
+  });
+
+  it('clips rows above the top of the canvas', () => {
+    const dst = canvas(4, 2);
+    pasteImage(dst, filled(4, 3, 0x7f), 0, -2);
+    // Rows -2 and -1 are dropped; the source's last row lands on row 0.
+    expect(Array.from(dst.data.subarray(0, 16))).toEqual(Array(16).fill(0x7f));
+    expect(Array.from(dst.data.subarray(16))).toEqual(Array(16).fill(0));
+  });
+
+  it('clips rows below the bottom of the canvas', () => {
+    const dst = canvas(4, 2);
+    pasteImage(dst, filled(4, 3, 0x7f), 0, 1);
+    expect(Array.from(dst.data.subarray(0, 16))).toEqual(Array(16).fill(0));
+    expect(Array.from(dst.data.subarray(16))).toEqual(Array(16).fill(0x7f));
+  });
+
+  it('names the operation that was handed an inconsistent image', () => {
+    const liar: RawImage = { width: 4, height: 2, data: new Uint8Array(8) };
+    expect(() => rotateRawImage(liar, 90)).toThrow(/^rotateRawImage: image data is 8 bytes/);
+    expect(() => halveWidth(liar)).toThrow(/^halveWidth: image data is 8 bytes/);
   });
 });
