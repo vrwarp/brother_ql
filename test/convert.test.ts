@@ -10,6 +10,7 @@ import { convert, createJob, expectedImageSize, prepareImage } from '../src/conv
 import { RasterError, UnsupportedCommandError } from '../src/errors.js';
 import { getBit } from '../src/image/raw-image.js';
 import { getLabel } from '../src/labels.js';
+import { getModel, type Model } from '../src/models.js';
 import { BrotherQLRaster } from '../src/raster.js';
 
 function solidImage(
@@ -105,9 +106,99 @@ describe('prepareImage geometry', () => {
     expect(page.rows).toBe(40);
   });
 
+  it('rejects each bad dimension on its own', () => {
+    // Width and height are validated independently, and a zero is as fatal as
+    // a fraction: both make the buffer-length check below pass for the wrong
+    // reason, and a fractional stride would read half-pixels for the rest of
+    // the image.
+    const cases: Array<[number, number]> = [
+      [0, 4],
+      [4, 0],
+      [-4, 4],
+      [4, -4],
+      [4.5, 4],
+      [4, 4.5],
+    ];
+    for (const [width, height] of cases) {
+      const image = { width, height, data: new Uint8Array(Math.max(0, width * height * 4)) };
+      expect(() => prepareImage(image, 'QL-700', '62'), `${width}x${height}`).toThrow(
+        new RegExp(`Image dimensions must be positive integers, got ${width}x${height}\\.`),
+      );
+    }
+  });
+
+  it('carries the offending dimensions on every geometry failure', () => {
+    // A caller catching RasterError is meant to be able to show the size it
+    // should have supplied without parsing the message.
+    const dims = (run: () => unknown): [unknown, unknown] => {
+      try {
+        run();
+      } catch (error) {
+        return [(error as RasterError).expected, (error as RasterError).actual];
+      }
+      throw new Error('should have thrown');
+    };
+
+    expect(dims(() => prepareImage({ width: 4, height: 2, data: new Uint8Array(8) }, 'QL-700', '62')))
+      .toEqual([undefined, [4, 2]]);
+    expect(dims(() => prepareImage({ width: 0, height: 2, data: new Uint8Array(0) }, 'QL-700', '62')))
+      .toEqual([undefined, [0, 2]]);
+    expect(dims(() => prepareImage(solidImage(696, 4), 'PT-P750W', '62')))
+      .toEqual([[128, 0], [696, 0]]);
+    expect(dims(() => prepareImage(solidImage(500, 4), 'QL-700', '62')))
+      .toEqual([[696, 4], [500, 4]]);
+  });
+
+  it('adds the margin to what a label needs rather than discounting it', () => {
+    // 62 mm media needs 696 dots plus 12 of offset. No shipping model sits
+    // close enough to that total for the sign to matter, so a head sized to
+    // straddle it is what decides.
+    const head = (bytesPerRow: number) =>
+      ({ ...getModel('QL-700'), identifier: 'TEST', numberBytesPerRow: bytesPerRow }) as Model;
+
+    expect(() => prepareImage(solidImage(696, 4), head(88), '62')).toThrow(
+      /Label '62' needs 696 dots plus 12 of margin, which does not fit the 704 dot print head of the TEST\./,
+    );
+    expect(() => prepareImage(solidImage(696, 4), head(89), '62')).not.toThrow();
+  });
+
+  it('rotates only when both die-cut dimensions are transposed', () => {
+    // Matching one dimension is not enough: the message names the size the
+    // image had when it was checked, so a spurious rotation shows up as the
+    // dimensions being reported the wrong way round.
+    const expected = "62x29' expects 696x271";
+    expect(() => prepareImage(solidImage(271, 500), 'QL-700', '62x29')).toThrow(
+      new RegExp(`Bad image dimensions: 271x500\\. Label '${expected}\\.`),
+    );
+    expect(() => prepareImage(solidImage(500, 696), 'QL-700', '62x29')).toThrow(
+      new RegExp(`Bad image dimensions: 500x696\\. Label '${expected}\\.`),
+    );
+    // Both transposed: rotated, and accepted.
+    expect(prepareImage(solidImage(271, 696), 'QL-700', '62x29').rows).toBe(271);
+  });
+
+  it('rejects a die-cut image that is wrong in only one dimension', () => {
+    for (const [width, height] of [
+      [696, 500],
+      [500, 271],
+    ] as Array<[number, number]>) {
+      expect(() => prepareImage(solidImage(width, height), 'QL-700', '62x29')).toThrow(
+        new RegExp(`Bad image dimensions: ${width}x${height}\\.`),
+      );
+    }
+  });
+
   it('refuses red on a model without two colour support', () => {
     expect(() => prepareImage(solidImage(696, 4), 'QL-700', '62red', { red: true })).toThrow(
       UnsupportedCommandError,
+    );
+  });
+
+  it('refuses red on a model without two colour support even with nothing to print', () => {
+    // convert() checks before it emits anything; without that the only check
+    // is the per-image one, which an empty job never reaches.
+    expect(() => convert(quiet('QL-700'), [], '62red', { red: true })).toThrow(
+      /Printing in red is not supported by QL-700\./,
     );
   });
 
