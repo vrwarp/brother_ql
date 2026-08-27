@@ -307,8 +307,9 @@ Three behaviours were changed on purpose, because the Python versions are bugs:
 
 ```bash
 npm install
-npm test            # ~1100 tests, including the byte-for-byte golden comparison
+npm test            # ~1400 tests, including the byte-for-byte golden comparison
 npm run test:coverage
+npm run mutation    # mutation testing (slow: see below)
 npm run bench       # hot path benchmarks (for comparing before/after on one machine)
 npm run typecheck
 npm run demo:dev    # the demo at http://localhost:5173 (localhost is a secure context)
@@ -335,8 +336,59 @@ The suite is built in layers:
   ceilings, sized so a Raspberry Pi passes easily but an accidental O(n²) in a
   hot loop fails loudly. Real measurements live in `npm run bench`.
 
+- **Mutation testing** (`npm run mutation`) — StrykerJS rewrites every operator,
+  literal and branch in `src/` one at a time and re-runs the suite against each.
+  Line coverage proves a line ran; this proves the suite would *notice* if that
+  line were wrong.
+
 Coverage sits at 100% of statements, functions and lines, and ~98% of branches
-(the rest are defensive arms that well-formed hardware cannot reach).
+(the rest are defensive arms that well-formed hardware cannot reach). The
+mutation score is **100%**: of 2820 mutants, 2678 are killed by the suite and
+142 are equivalent — no possible test can distinguish them, and each carries a
+`// Stryker disable` comment in the source setting out why.
+
+### Mutation testing
+
+```bash
+npm run mutation                        # the whole sweep, shard by shard
+npm run mutation -- --resume            # only the shards not yet done
+npm run mutation:file src/raster.ts     # one file, for a quick loop
+npm run mutation:summary                # merge the shard reports into a score
+```
+
+The sweep is split into shards rather than run in one pass, which is the
+difference between an hour and most of a day. Stryker instruments every file
+named by `--mutate`, and that instrumentation costs real time in the pixel
+loops — with all of `src/` instrumented the suite runs about ten times slower.
+That is paid once per mutant for the ~470 *static* mutants in the model and
+label tables: they are evaluated when their module loads, so Stryker cannot
+attribute them to individual tests and runs the whole suite for each.
+`scripts/mutation-shards.mjs` holds the split; CI runs the shards as a matrix
+(`.github/workflows/mutation.yml`) weekly and on demand, not on every push.
+
+A shard writes `reports/mutation/shards/<name>.json`; a single-file run also
+writes `reports/mutation/index.html`, which shows each mutant in place in the
+source together with the tests that covered it — that is the view to read, not
+the console summary.
+
+A surviving mutant is a behaviour no assertion pins down, and almost always the
+fix is a missing assertion. Where a mutant is genuinely equivalent the source
+says so and says why, rather than the score quietly absorbing it. Three
+recurring reasons, all argued at their call sites:
+
+- an extra pass round a loop that writes past the end of a typed array, which
+  JavaScript discards;
+- a shortcut whose slower path computes exactly the same answer — the alpha
+  compositing fast paths, the prepared-page cache, `rotateRawImage` at zero
+  degrees;
+- a guard for a shape the data cannot take, such as bit 8 of a byte, or a
+  second opcode matching where no signature is a prefix of another.
+
+The equivalence claims for `packbits.ts`, `analyze.ts` and `status.ts` were
+checked rather than argued: each mutant was built into a copy of its module and
+run against the original over thousands of inputs — every possible PackBits
+header byte, every truncation of every opcode signature, every combination of
+media type code, width and length — and required to produce identical output.
 
 Regenerating the golden fixtures needs Python and the pinned Pillow:
 
