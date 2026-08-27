@@ -21,15 +21,17 @@ import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
 
+import { DiagnosticsRecorder } from '../src/diagnostics.js';
 import { BusyError, PrinterStatusError, StatusTimeoutError } from '../src/errors.js';
 import { BrotherQLPrinter } from '../src/printer.js';
-import { BrotherQLPrinterCore } from '../src/printer-core.js';
+import { BrotherQLPrinterCore, type PrintProgress } from '../src/printer-core.js';
 import {
   MockUsbDevice,
   STATUS_COMPLETED,
   STATUS_ERROR_COVER_OPEN,
   STATUS_PHASE_WAITING,
   STATUS_REPLY,
+  makeStatusPacket,
   type ReadScriptEntry,
 } from './util/mock-usb.js';
 
@@ -105,14 +107,20 @@ describe('printer-core module graph', () => {
   });
 });
 
-function makeCore(readScript: ReadScriptEntry[] = []): {
+function makeCore(
+  readScript: ReadScriptEntry[] = [],
+  options: { diagnostics?: DiagnosticsRecorder } = {},
+): {
   printer: BrotherQLPrinterCore;
   device: MockUsbDevice;
 } {
   const device = new MockUsbDevice({ readScript, deferReadsUntilWrite: true });
-  const printer = new BrotherQLPrinterCore(device, { model: 'QL-810W' });
+  const printer = new BrotherQLPrinterCore(device, { model: 'QL-810W', ...options });
   return { printer, device };
 }
+
+/** A one-instruction job, enough to make the transport write something. */
+const JOB = Uint8Array.from([0x1b, 0x40, 0x1a]);
 
 describe('BrotherQLPrinterCore', () => {
   it('sends a prebuilt job and waits for the page to be confirmed', async () => {
@@ -170,6 +178,194 @@ describe('BrotherQLPrinterCore', () => {
 
     const status = await printer.queryStatus(500);
     expect(status.statusType).toBe('reply');
+  });
+
+  it('gives up on a status query the printer never answers', async () => {
+    const { printer } = makeCore([{ kind: 'silence' }]);
+    await printer.open();
+
+    await expect(printer.queryStatus(60)).rejects.toThrow(StatusTimeoutError);
+    await expect(printer.queryStatus(60)).rejects.toThrow(/stopped responding for 60 ms/);
+    // The lock is released even though the query failed.
+    expect(printer.busy).toBe(false);
+
+    await printer.close();
+  });
+
+  it('gives the whole timeout to the wait, not a fraction of it', async () => {
+    // The remaining budget is what the wait is given, so getting that
+    // arithmetic wrong abandons a printer that was about to answer. 40 ms of
+    // silence inside a 2 s budget is well within it.
+    const { printer } = makeCore([
+      { kind: 'delay', ms: 40 },
+      { kind: 'data', bytes: STATUS_REPLY },
+    ]);
+    await printer.open();
+
+    await expect(printer.queryStatus(2000)).resolves.toMatchObject({ statusType: 'reply' });
+
+    await printer.close();
+  });
+
+  it('ignores packets that arrived before the query was asked', async () => {
+    // A printer volunteers status during a job, and those packets outlive it.
+    // Answering a fresh query with a stale one would report media that may
+    // since have been changed.
+    const { printer } = makeCore([{ kind: 'data', bytes: STATUS_REPLY }]);
+    await printer.open();
+    printer.transport.statusQueue.push(
+      makeStatusPacket({ statusTypeCode: 0x00, mediaWidthMm: 29 }),
+    );
+
+    const status = await printer.queryStatus(500);
+    expect(status.mediaWidthMm).toBe(62);
+
+    await printer.close();
+  });
+
+  it('ignores packets that arrived before a raw job was sent', async () => {
+    const { printer } = makeCore([
+      { kind: 'data', bytes: STATUS_COMPLETED },
+      { kind: 'data', bytes: STATUS_PHASE_WAITING },
+    ]);
+    await printer.open();
+    // A leftover completion from an earlier job would count towards this one.
+    printer.transport.statusQueue.push(STATUS_COMPLETED);
+
+    const result = await printer.sendRaw(JOB);
+    expect(result.pagesPrinted).toBe(1);
+
+    await printer.close();
+  });
+
+  it('waits out the idle timeout it was given, not a default one', async () => {
+    const { printer } = makeCore([{ kind: 'silence' }]);
+    await printer.open();
+
+    await expect(printer.sendRaw(JOB, { statusTimeoutMs: 60 })).rejects.toThrow(
+      /stopped responding for 60 ms/,
+    );
+
+    await printer.close();
+  });
+
+  it('treats a set error bit as a failure whatever the status type says', async () => {
+    // The two halves of that check are independent: a printer can raise a
+    // fault flag on a packet whose status type is an ordinary reply.
+    const { printer } = makeCore([
+      { kind: 'data', bytes: makeStatusPacket({ statusTypeCode: 0x00, errorInfo1: 0x01 }) },
+    ]);
+    await printer.open();
+
+    await expect(printer.sendRaw(JOB)).rejects.toThrow(/No media when printing/);
+
+    await printer.close();
+  });
+
+  it('treats an error status with no error bits set as a failure', async () => {
+    // The printer can report a fault through the status type alone; taking
+    // only the error bits into account would let the job hang instead.
+    const { printer } = makeCore([
+      { kind: 'data', bytes: makeStatusPacket({ statusTypeCode: 0x02 }) },
+    ]);
+    await printer.open();
+
+    await expect(printer.sendRaw(JOB)).rejects.toThrow(PrinterStatusError);
+
+    await printer.close();
+  });
+
+  it('waits for the printer to say it is ready, not just that it finished', async () => {
+    // Every page confirmed is not the end of a job: the printer is still busy
+    // feeding and cutting, and starting the next one before it reports the
+    // waiting phase is what makes a multi-job run stall.
+    const { printer } = makeCore([
+      { kind: 'data', bytes: STATUS_COMPLETED },
+      { kind: 'silence' },
+    ]);
+    await printer.open();
+
+    await expect(printer.sendRaw(JOB, { statusTimeoutMs: 60 })).rejects.toThrow(
+      StatusTimeoutError,
+    );
+
+    await printer.close();
+  });
+
+  it('emits every status packet it sees under the name callers listen for', async () => {
+    const { printer } = makeCore([
+      { kind: 'data', bytes: STATUS_COMPLETED },
+      { kind: 'data', bytes: STATUS_PHASE_WAITING },
+    ]);
+    await printer.open();
+
+    const seen: number[] = [];
+    printer.on('status', (event) => seen.push(event.detail.statusTypeCode));
+    await printer.sendRaw(JOB);
+
+    expect(seen).toEqual([0x01, 0x06]);
+
+    await printer.close();
+  });
+
+  it('reports the job to an attached tracer', async () => {
+    const diagnostics = new DiagnosticsRecorder();
+    const { printer } = makeCore(
+      [
+        { kind: 'data', bytes: STATUS_COMPLETED },
+        { kind: 'data', bytes: STATUS_PHASE_WAITING },
+      ],
+      { diagnostics },
+    );
+    await printer.open();
+
+    const progress: PrintProgress[] = [];
+    await printer.sendRaw(JOB, { onProgress: (p) => progress.push({ ...p }) });
+
+    expect(progress.map((p) => p.phase)).toEqual(['sending']);
+    expect(progress[0]).toMatchObject({ bytesSent: 3, bytesTotal: 3, pageCount: 1 });
+
+    const events = diagnostics.events().filter((event) => event.category === 'printer');
+    expect(events.map((event) => event.name)).toEqual([
+      'send-start',
+      'page-completed',
+      'job-done',
+    ]);
+    expect(events[0]?.data).toEqual({ bytes: 3, pageCount: 1, nonBlocking: false });
+    expect(events[1]?.data).toEqual({ pagesPrinted: 1, pageCount: 1 });
+    expect(events[2]?.data).toEqual({ pagesPrinted: 1 });
+
+    await printer.close();
+  });
+
+  it('reports a status query and a printer fault to an attached tracer', async () => {
+    const diagnostics = new DiagnosticsRecorder();
+    const { printer } = makeCore([{ kind: 'data', bytes: STATUS_REPLY }], { diagnostics });
+    await printer.open();
+    await printer.queryStatus(500);
+
+    const query = diagnostics
+      .events()
+      .find((event) => event.category === 'printer' && event.name === 'query-status');
+    expect(query?.data).toEqual({
+      statusType: 'reply',
+      mediaType: 'continuous',
+      mediaWidthMm: 62,
+      errors: 0,
+    });
+    await printer.close();
+
+    const faulty = makeCore([{ kind: 'data', bytes: STATUS_ERROR_COVER_OPEN }], { diagnostics });
+    await faulty.printer.open();
+    await expect(faulty.printer.sendRaw(JOB)).rejects.toThrow(PrinterStatusError);
+
+    const fault = diagnostics
+      .events()
+      .find((event) => event.category === 'printer' && event.name === 'printer-error');
+    expect(fault?.data).toMatchObject({ statusType: 'error' });
+    expect(JSON.stringify(fault?.data?.errors)).toContain('Cover opened');
+
+    await faulty.printer.close();
   });
 
   it('hands back the subclass from the static factories', async () => {

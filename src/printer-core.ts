@@ -194,7 +194,9 @@ export class BrotherQLPrinterCore extends TypedEventTarget<PrinterEvents> {
   constructor(device: MinimalUsbDevice, options: PrinterOptions = {}) {
     super();
     this.transport = new UsbTransport(device, options);
-    if (options.model) this.#model = resolveModel(options.model);
+    // Through the setter, so an identifier is resolved — and rejected — in
+    // exactly one place.
+    this.model = options.model;
     this.diagnostics = options.diagnostics;
 
     this.transport.on('disconnect', () => this.emit('disconnect'));
@@ -245,6 +247,10 @@ export class BrotherQLPrinterCore extends TypedEventTarget<PrinterEvents> {
   }
 
   set model(model: string | Model | undefined) {
+    // Stryker disable next-line ConditionalExpression: `resolveModel` hands
+    // back anything that is not a string unchanged, so it returns undefined
+    // for undefined too. The test is a type-level one — its signature does not
+    // admit undefined — rather than a behavioural one.
     this.#model = model === undefined ? undefined : resolveModel(model);
   }
 
@@ -293,6 +299,12 @@ export class BrotherQLPrinterCore extends TypedEventTarget<PrinterEvents> {
       const deadline = Date.now() + timeoutMs;
       for (;;) {
         const remaining = deadline - Date.now();
+        // Stryker disable next-line EqualityOperator,ConditionalExpression,CallExpression:
+        // this is an early exit, not the deadline itself. Drop it, or move its
+        // boundary by one, and the wait below is simply handed a timeout of
+        // zero or less, which rejects at once and is translated into the same
+        // StatusTimeoutError. What enforces the deadline is `remaining` being
+        // passed down as the wait's own budget.
         if (remaining <= 0) throw new StatusTimeoutError(0, timeoutMs);
 
         const packet = await this.takePacket(remaining, 0, timeoutMs);
