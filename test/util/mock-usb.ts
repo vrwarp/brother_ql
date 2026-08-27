@@ -70,6 +70,12 @@ export interface MockUsbDeviceOptions {
    * as stale — before the job is sent.
    */
   deferReadsUntilWrite?: boolean;
+  /** Report an already-active configuration, so `open()` need not select one. */
+  startConfigured?: boolean;
+  /** Report no configurations at all, so there is no value to select. */
+  noConfigurations?: boolean;
+  /** The value the single configuration reports. Defaults to 1. */
+  configurationValue?: number;
 }
 
 const DEFAULT_INTERFACES: MockInterface[] = [
@@ -95,7 +101,12 @@ export class MockUsbDevice implements MinimalUsbDevice {
   readonly claimed = new Set<number>();
   releaseCount = 0;
   closeCount = 0;
+  openCount = 0;
   clearHaltCalls: Array<{ direction: string; endpointNumber: number }> = [];
+  /** Configuration values passed to `selectConfiguration`, in order. */
+  readonly selectedConfigurations: number[] = [];
+  /** Lengths requested by `transferIn`, in order. */
+  readonly readLengths: number[] = [];
 
   #opened = false;
   #configuration: USBConfiguration | null = null;
@@ -113,7 +124,20 @@ export class MockUsbDevice implements MinimalUsbDevice {
     this.serialNumber = options.serialNumber;
     this.productName = options.productName ?? 'QL-820NWB';
     this.#readScript = [...(options.readScript ?? [])];
-    this.#configurations = [buildConfiguration(options.interfaces ?? DEFAULT_INTERFACES)];
+    this.#configurations = options.noConfigurations
+      ? []
+      : [
+          buildConfiguration(
+            options.interfaces ?? DEFAULT_INTERFACES,
+            options.configurationValue ?? 1,
+          ),
+        ];
+    // A real device reports no active configuration until one is selected,
+    // which is the default here too; `startConfigured` models one that comes
+    // up already configured, as a device the browser has spoken to does.
+    if (options.startConfigured === true) {
+      this.#configuration = this.#configurations[0] ?? null;
+    }
   }
 
   get opened(): boolean {
@@ -169,6 +193,7 @@ export class MockUsbDevice implements MinimalUsbDevice {
   }
 
   async open(): Promise<void> {
+    this.openCount += 1;
     if (this.#options.openError) throw this.#options.openError;
     this.#opened = true;
   }
@@ -182,6 +207,7 @@ export class MockUsbDevice implements MinimalUsbDevice {
   }
 
   async selectConfiguration(configurationValue: number): Promise<void> {
+    this.selectedConfigurations.push(configurationValue);
     if (this.#options.selectConfigurationError) throw this.#options.selectConfigurationError;
     const found = this.#configurations.find((c) => c.configurationValue === configurationValue);
     this.#configuration = found ?? this.#configurations[0] ?? null;
@@ -202,7 +228,8 @@ export class MockUsbDevice implements MinimalUsbDevice {
     if (this.#options.clearHaltError) throw this.#options.clearHaltError;
   }
 
-  async transferIn(_endpointNumber: number, _length: number): Promise<USBInTransferResult> {
+  async transferIn(_endpointNumber: number, length: number): Promise<USBInTransferResult> {
+    this.readLengths.push(length);
     for (;;) {
       // Closing a real device rejects any transfer that is parked on it, which
       // is what lets the transport's reader loop terminate.
@@ -292,9 +319,12 @@ function toDataView(bytes: Uint8Array): DataView {
   return new DataView(copy.buffer, copy.byteOffset, copy.byteLength);
 }
 
-function buildConfiguration(interfaces: MockInterface[]): USBConfiguration {
+function buildConfiguration(
+  interfaces: MockInterface[],
+  configurationValue = 1,
+): USBConfiguration {
   return {
-    configurationValue: 1,
+    configurationValue,
     configurationName: 'mock',
     interfaces: interfaces.map((iface) => {
       const alternate = {

@@ -327,6 +327,50 @@ describe('transport and printer diagnostics', () => {
     );
   });
 
+  /**
+   * Both of these surface as a plain "the printer was disconnected", which is
+   * what a caller should branch on — the cause is where the detail lives, and
+   * it is the only thing that distinguishes a wedged endpoint from an unplugged
+   * cable when somebody is reading a bug report.
+   */
+  const causeOf = async (run: () => Promise<unknown>): Promise<string> => {
+    try {
+      await run();
+    } catch (error) {
+      return String((error as { cause?: unknown }).cause);
+    }
+    throw new Error('expected the write to fail');
+  };
+
+  it('says a wedged endpoint is wedged, not merely disconnected', async () => {
+    const device = new MockUsbDevice({ stallAllWrites: true });
+    const transport = new UsbTransport(device);
+    await transport.open();
+    await expect(causeOf(() => transport.write(Uint8Array.from([1, 2, 3])))).resolves.toMatch(
+      /output endpoint stalled again immediately after a halt-clear/,
+    );
+    await transport.close();
+  });
+
+  it('says a device accepting nothing is a device that has gone', async () => {
+    const device = new MockUsbDevice({ acceptNothing: true });
+    const transport = new UsbTransport(device);
+    await transport.open();
+    await expect(causeOf(() => transport.write(Uint8Array.from([1, 2, 3])))).resolves.toMatch(
+      /device accepted none of the bytes in a transfer/,
+    );
+    await transport.close();
+  });
+
+  it('names what was missing when no printer interface could be found', async () => {
+    const device = new MockUsbDevice({
+      interfaces: [{ interfaceNumber: 0, interfaceClass: 0x03, endpoints: [] }],
+    });
+    await expect(new UsbTransport(device).open()).rejects.toThrow(
+      /No USB printer interface found on this device\. Is it a Brother label printer\?/,
+    );
+  });
+
   it('tells a caller how to select a model before printing', async () => {
     const printer = new BrotherQLPrinter(new MockUsbDevice());
     await expect(printer.print(whiteImage(696, 4), { label: '62' })).rejects.toThrow(

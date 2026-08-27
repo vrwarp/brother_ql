@@ -17,7 +17,7 @@ import {
   type JobProgress,
   type PrintProgress,
 } from '../src/printer-core.js';
-import { UsbTransport } from '../src/usb/transport.js';
+import { detectPlatform, UsbTransport } from '../src/usb/transport.js';
 import {
   MockUsbDevice,
   STATUS_COMPLETED,
@@ -30,11 +30,36 @@ afterEach(() => {
 });
 
 describe('per-platform claim advice', () => {
-  const cases: Array<[string, RegExp]> = [
-    ['Mozilla/5.0 (Windows NT 10.0; Win64; x64)', /usbprint\.sys|Zadig/],
-    ['Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)', /print job is queued/],
-    ['Mozilla/5.0 (X11; Linux x86_64)', /usblp/],
-    ['Mozilla/5.0 (SomethingExotic 1.0)', /Another application or a system driver/],
+  /**
+   * The advice is the whole point of the error: a claim failure is almost
+   * always an operating system driver holding the device, and which one — and
+   * what to do about it — differs per platform. Each sentence is asserted, not
+   * just one per platform, because the actionable half is usually the second:
+   * naming the driver without saying how to displace it leaves the user
+   * exactly where they were.
+   */
+  const cases: Array<[string, RegExp[]]> = [
+    [
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+      [
+        /built-in usbprint\.sys driver claims the printer exclusively/,
+        /Replace it with WinUSB \(for example using Zadig\) to allow browser access/,
+        /stops other applications from printing until it is reverted/,
+      ],
+    ],
+    ['Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)', [/no print job is queued for this printer/]],
+    [
+      'Mozilla/5.0 (X11; Linux x86_64)',
+      [
+        /usblp kernel module claims the printer/,
+        /chrome:\/\/flags\/#automatic-usb-detach, or unload usblp/,
+        /udev rule grants access to devices with vendor id 04f9/,
+      ],
+    ],
+    [
+      'Mozilla/5.0 (SomethingExotic 1.0)',
+      [/Another application or a system driver may be using the printer/],
+    ],
   ];
 
   for (const [userAgent, advice] of cases) {
@@ -49,9 +74,25 @@ describe('per-platform claim advice', () => {
         (error: unknown) => error,
       );
       expect(failure).toBeInstanceOf(InterfaceClaimError);
-      expect((failure as Error).message).toMatch(advice);
+      for (const sentence of advice) {
+        expect((failure as Error).message).toMatch(sentence);
+      }
     });
   }
+
+  it('names the platform it guessed from the user agent alone', () => {
+    // `navigator.platform` is deprecated and empty in some browsers, so the
+    // user agent has to carry the guess on its own — and vice versa for older
+    // embedders that only expose `platform`.
+    vi.stubGlobal('navigator', { userAgent: '', platform: 'Win32' });
+    expect(detectPlatform()).toBe('windows');
+    vi.stubGlobal('navigator', { userAgent: 'Mozilla/5.0 (Linux; Android 14)', platform: '' });
+    expect(detectPlatform()).toBe('android');
+    vi.stubGlobal('navigator', { userAgent: 'X11; CrOS x86_64', platform: '' });
+    expect(detectPlatform()).toBe('linux');
+    vi.stubGlobal('navigator', { userAgent: '', platform: '' });
+    expect(detectPlatform()).toBe('unknown');
+  });
 
   it('advises for android, where no driver swap is possible', async () => {
     vi.stubGlobal('navigator', { userAgent: 'Mozilla/5.0 (Linux; Android 14)', platform: '' });

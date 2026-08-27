@@ -482,7 +482,10 @@ export class UsbTransport extends TypedEventTarget<TransportEvents> {
       this.#diag?.event('transport', 'disconnect', { during: 'write', error: String(error) });
       throw new DeviceDisconnectedError(error);
     } finally {
-      if (timer !== undefined) clearTimeout(timer);
+      // `clearTimeout(undefined)` is a defined no-op, so this needs no guard —
+      // and it must run on every path out, or a job's worth of watchdogs keeps
+      // the event loop alive after the job is done.
+      clearTimeout(timer);
     }
   }
 
@@ -519,6 +522,7 @@ export class UsbTransport extends TypedEventTarget<TransportEvents> {
       // Closing rejects the parked transfer, which ends the reader. Cap the
       // wait anyway so a misbehaving device cannot hang the caller — and
       // clear the cap afterwards so the timer does not outlive the close.
+      // (`clearTimeout(undefined)` is a no-op, so the clear needs no guard.)
       let cap: ReturnType<typeof setTimeout> | undefined;
       await Promise.race([
         this.#readerDone.catch(() => {}),
@@ -526,7 +530,7 @@ export class UsbTransport extends TypedEventTarget<TransportEvents> {
           cap = setTimeout(resolve, 2000);
         }),
       ]);
-      if (cap !== undefined) clearTimeout(cap);
+      clearTimeout(cap);
       this.#readerDone = null;
     }
 
