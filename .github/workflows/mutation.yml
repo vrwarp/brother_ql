@@ -1,27 +1,45 @@
 name: Mutation testing
 
-# A full run rewrites every operator, literal and branch in src/ one at a time
-# and re-runs the suite against each — thousands of test runs, tens of minutes
-# of machine time. That is too slow to gate every push, so it runs weekly and
-# on demand, and `npm test` stays the fast gate.
+# Stryker rewrites every operator, literal and branch in src/ one at a time and
+# re-runs the suite against each — around 2800 mutants. That is far too slow to
+# gate every push, so it runs weekly and on demand, and `npm test` stays the
+# fast gate.
 on:
   schedule:
     # Mondays, 04:00 UTC.
     - cron: '0 4 * * 1'
   workflow_dispatch:
     inputs:
-      mutate:
-        description: 'Limit to some files, e.g. src/raster.ts,src/convert.ts'
+      shard:
+        description: 'Run one shard only (see scripts/mutation-shards.mjs)'
         required: false
         type: string
 
 jobs:
-  mutation:
-    name: StrykerJS
+  # One job per shard. Sharding is not only for parallelism: a sweep that
+  # instruments all of src/ at once runs the suite about ten times slower, and
+  # pays that for every static mutant in the model and label tables. See
+  # scripts/mutation-shards.mjs.
+  shard:
+    name: ${{ matrix.shard }}
     runs-on: ubuntu-latest
-    # The full sweep is long. The ceiling is generous rather than tight so a
-    # slow runner reports a score instead of a cancellation.
-    timeout-minutes: 300
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        shard:
+          - image-tone
+          - image-grayscale-head
+          - image-grayscale-tail
+          - image-pack
+          - image-raw
+          - packbits
+          - analyze
+          - convert-raster
+          - tables
+          - status-diagnostics
+          - printer
+          - usb
     steps:
       - uses: actions/checkout@v4
 
@@ -32,20 +50,35 @@ jobs:
 
       - run: npm ci
 
-      # The mutation score is only meaningful if the suite passes to begin
-      # with: Stryker aborts on a failing initial test run, but failing here
-      # says why in seconds instead of after the dry run.
-      - run: npm test
+      - if: inputs.shard == '' || inputs.shard == matrix.shard
+        run: node scripts/mutation-sweep.mjs --shard ${{ matrix.shard }}
 
-      - name: Run mutation testing
-        run: npm run mutation ${{ inputs.mutate && format('-- --mutate {0}', inputs.mutate) || '' }}
-
-      # The HTML report is how a survivor is actually read: it shows each
-      # mutant in place in the source, with the tests that covered it.
-      - name: Upload the mutation report
-        if: always()
+      - if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: mutation-report
-          path: reports/mutation/
+          name: mutation-${{ matrix.shard }}
+          path: reports/mutation/shards/
+          if-no-files-found: ignore
           retention-days: 30
+
+  # The shards each enforce the threshold on their own slice; this is the
+  # number that actually counts, and the one the README quotes.
+  summary:
+    name: Mutation score
+    needs: shard
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: mutation-*
+          merge-multiple: true
+          path: reports/mutation/shards
+
+      - run: node scripts/mutation-summary.mjs

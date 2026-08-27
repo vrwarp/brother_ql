@@ -72,8 +72,9 @@
     "demo:preview": "vite preview --config demo/vite.config.ts",
     "prepublishOnly": "npm run build",
     "test:coverage": "vitest run --coverage",
-    "mutation": "stryker run",
-    "mutation:incremental": "stryker run --incremental"
+    "mutation": "node scripts/mutation-sweep.mjs",
+    "mutation:file": "stryker run --mutate",
+    "mutation:summary": "node scripts/mutation-summary.mjs"
   },
   "dependencies": {
     "@types/w3c-web-usb": "^1.0.10"

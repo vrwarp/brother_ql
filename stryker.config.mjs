@@ -5,9 +5,13 @@
 // literal and branch in src/ one at a time and re-runs the tests: a mutant that
 // survives is a behaviour no assertion pins down.
 //
-//   npm run mutation              full run, writes reports/mutation/index.html
-//   npm run mutation -- -m src/raster.ts    one file, for a quick loop
-//   npm run mutation:incremental  only what changed since the last full run
+//   npm run mutation                        the whole sweep, shard by shard
+//   npm run mutation -- --resume            only the shards not yet done
+//   npm run mutation:file src/raster.ts     one file, for a quick loop
+//   npm run mutation:summary                merge the shard reports into a score
+//
+// The sweep is sharded rather than run in one pass; scripts/mutation-shards.mjs
+// explains why, and it is the difference between an hour and most of a day.
 /** @type {import('@stryker-mutator/api/core').PartialStrykerOptions} */
 export default {
   packageManager: 'npm',
@@ -55,8 +59,6 @@ export default {
   // 4 workers on a 4-core box: the runs are I/O-punctuated enough that
   // oversubscribing by one beats leaving a core idle.
   concurrency: 4,
-
-  incrementalFile: 'reports/mutation/stryker-incremental.json',
 
   tempDirName: 'node_modules/.stryker-tmp',
   cleanTempDir: true,
