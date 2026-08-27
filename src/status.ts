@@ -136,11 +136,15 @@ function decodePhaseType(code: number): PhaseType {
 
 function decodeErrors(errorInfo1: number, errorInfo2: number): PrinterErrorFlag[] {
   const errors: PrinterErrorFlag[] = [];
+  // Stryker disable next-line EqualityOperator: `bit <= 8` is equivalent —
+  // both arguments come from a Uint8Array, so bit 8 is never set and the extra
+  // pass matches nothing.
   for (let bit = 0; bit < 8; bit++) {
     if (errorInfo1 & (1 << bit)) {
       errors.push({ byte: 1, bit, message: ERROR_INFORMATION_1[bit] as string });
     }
   }
+  // Stryker disable next-line EqualityOperator: equivalent, as above.
   for (let bit = 0; bit < 8; bit++) {
     if (errorInfo2 & (1 << bit)) {
       errors.push({ byte: 2, bit, message: ERROR_INFORMATION_2[bit] as string });
@@ -214,6 +218,12 @@ export function tryParseStatus(packet: Uint8Array): PrinterStatus | null {
  * @param model If given, labels restricted to other models are filtered out.
  */
 export function suggestLabels(status: PrinterStatus, model?: Model | string): Label[] {
+  // A shortcut, not a rule: no label has a tape width of 0, and a media type
+  // of 'none' matches neither arm of the filter, so both cases come back empty
+  // from the filter anyway. Verified exhaustively over every media type code,
+  // width and length before the suppression was added.
+  // Stryker disable next-line ConditionalExpression,LogicalOperator,StringLiteral:
+  // equivalent for the reason above.
   if (status.mediaType === 'none' || status.mediaWidthMm === 0) return [];
 
   const candidates = ALL_LABELS.filter((label) => {

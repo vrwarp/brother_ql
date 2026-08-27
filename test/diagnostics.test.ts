@@ -32,6 +32,9 @@ describe('DiagnosticsRecorder', () => {
     expect(events[0]).toMatchObject({ seq: 0, t: 100, category: 'a', name: 'first' });
     expect(events[0]?.data).toEqual({ x: 1 });
     expect(events[1]).toMatchObject({ seq: 1, t: 250, category: 'b', name: 'second' });
+    // Absent, not present-and-undefined: `data` is an optional field, and an
+    // explicit undefined would show up in anything that enumerates the keys.
+    expect(Object.keys(events[1] as object)).toEqual(['seq', 't', 'category', 'name']);
     expect(events[1]?.data).toBeUndefined();
   });
 
@@ -100,6 +103,23 @@ describe('DiagnosticsRecorder', () => {
     expect(parsed.capacity).toBe(8);
     expect(parsed.dropped).toBe(0);
     expect(parsed.events[0]).toMatchObject({ category: 'a', name: 'one', data: { n: 1 } });
+  });
+
+  it('prints a string value as itself, not as a JSON string', () => {
+    // JSON.stringify would wrap it in quotes, which is noise in a log line and
+    // turns a path or an error text into something that has to be unescaped
+    // before it can be read.
+    const line = formatTraceEvent({
+      seq: 0,
+      t: 1,
+      category: 'c',
+      name: 'n',
+      data: { error: 'NetworkError: device gone', empty: '', nothing: null },
+    });
+    expect(line).toContain('error=NetworkError: device gone');
+    expect(line).toContain('empty=');
+    expect(line).not.toContain('"');
+    expect(line).toContain('nothing=null');
   });
 
   it('formats nested data as JSON and primitives inline', () => {

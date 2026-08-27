@@ -25,6 +25,10 @@ const MAX_LENGTH = 127;
  * slack costs nothing.
  */
 function encodedSizeBound(n: number): number {
+  // Stryker disable next-line ArithmeticOperator: `(n - 1) >> 1` is
+  // equivalent. Any bound at or above the true 4n/3 worst case behaves
+  // identically, and 3n/2 either way clears it; only bounds that fall *below*
+  // it change anything, and those mutants are killed.
   return n + ((n + 1) >> 1) + 4;
 }
 
@@ -36,6 +40,11 @@ function encodedSizeBound(n: number): number {
  */
 export function packbitsEncode(data: Uint8Array): Uint8Array {
   if (data.length === 0) return new Uint8Array(0);
+  // Stryker disable next-line ConditionalExpression: skipping this shortcut is
+  // equivalent — the loop below is a no-op for one byte and the epilogue emits
+  // the same `00 <byte>`. It is kept because the reference encoder in
+  // test/util/packbits-reference.ts has it, and the two are compared
+  // structurally as well as by output.
   if (data.length === 1) return Uint8Array.from([0x00, data[0] as number]);
 
   const out = new Uint8Array(encodedSizeBound(data.length));
@@ -114,11 +123,18 @@ export function packbitsDecode(data: Uint8Array): Uint8Array {
   // Sizing pass: identical control flow, counts output bytes only.
   let size = 0;
   let pos = 0;
+  // Stryker disable next-line EqualityOperator: `pos <= data.length` is
+  // equivalent — the extra pass reads `data[data.length]` as undefined, which
+  // fails every branch test and adds nothing to the size.
   while (pos < data.length) {
     let headerByte = data[pos] as number;
     if (headerByte > 127) headerByte -= 256;
     pos += 1;
 
+    // Stryker disable next-line EqualityOperator: `headerByte > 0` is
+    // equivalent. The two differ only at header 0, which is a literal run of
+    // one byte; the repeat arm then computes `1 - 0` and repeats that same
+    // byte once. The TIFF encoding's off-by-one makes the two coincide there.
     if (headerByte >= 0) {
       const count = Math.min(headerByte + 1, data.length - pos);
       size += count;
@@ -135,12 +151,22 @@ export function packbitsDecode(data: Uint8Array): Uint8Array {
   const out = new Uint8Array(size);
   let outPos = 0;
   pos = 0;
+  // Stryker disable next-line EqualityOperator: equivalent, as in the sizing
+  // pass above.
   while (pos < data.length) {
     let headerByte = data[pos] as number;
     if (headerByte > 127) headerByte -= 256;
     pos += 1;
 
+    // Stryker disable next-line EqualityOperator: header 0 takes the repeat
+    // arm to the same effect, exactly as in the sizing pass above.
     if (headerByte >= 0) {
+      // Stryker disable next-line ArithmeticOperator: a wider clamp is
+      // equivalent here — `subarray` stops at the end of the input, so a
+      // literal run truncated by the end of the data copies the same bytes,
+      // and `outPos` running past the end of a buffer sized by the pass above
+      // writes nothing. The same mutant in that sizing pass changes the
+      // buffer's length and is killed.
       const count = Math.min(headerByte + 1, data.length - pos);
       out.set(data.subarray(pos, pos + count), outPos);
       outPos += count;
@@ -148,6 +174,10 @@ export function packbitsDecode(data: Uint8Array): Uint8Array {
     } else if (headerByte === -128) {
       // No-op.
     } else {
+      // Stryker disable next-line EqualityOperator,ConditionalExpression:
+      // dropping this guard is equivalent. `out` was sized by the pass above,
+      // which does have it, so the fill lands at or past the end of the buffer
+      // and `TypedArray.fill` clamps it away.
       if (pos < data.length) {
         const count = 1 - headerByte;
         out.fill(data[pos] as number, outPos, outPos + count);

@@ -35,11 +35,21 @@ export function packMirroredPlane(
   const rowBytes = width / 8;
   const data = new Uint8Array(rowBytes * height);
 
+  // Stryker disable next-line EqualityOperator: `y <= height` is equivalent —
+  // the extra row's writes all land past the end of `data`, and JavaScript
+  // discards out-of-range writes to a typed array.
   for (let y = 0; y < height; y++) {
     const srcRow = y * width;
     const dstRow = y * rowBytes;
+    // Stryker disable next-line EqualityOperator: `k <= rowBytes` is equivalent.
+    // The extra byte is written at `(y + 1) * rowBytes`, the first byte of the
+    // next row — which the next iteration of this loop overwrites, since rows
+    // are filled in increasing order. On the last row it falls off the end and
+    // is discarded.
     for (let k = 0; k < rowBytes; k++) {
       let byte = 0;
+      // Stryker disable next-line EqualityOperator: `j <= 8` is equivalent —
+      // the ninth pass ORs in `0x80 >> 8`, which is 0.
       for (let j = 0; j < 8; j++) {
         // After mirroring, output bit j of byte k is the source pixel at
         // width - 1 - (8k + j).
@@ -58,11 +68,16 @@ export function packMirroredPlane(
 export function unpackMirroredPlane(image: BitImage): Uint8Array {
   const { width, height, rowBytes, data } = image;
   const plane = new Uint8Array(width * height);
+  // Stryker disable next-line EqualityOperator: `y <= height` is equivalent —
+  // the extra row reads past the end of `data`, and `undefined & mask` is 0,
+  // so it sets no dots.
   for (let y = 0; y < height; y++) {
     const srcRow = y * rowBytes;
     const dstRow = y * width;
     for (let k = 0; k < rowBytes; k++) {
       const byte = data[srcRow + k] as number;
+      // Stryker disable next-line EqualityOperator: `j <= 8` is equivalent —
+      // the ninth pass tests `byte & (0x80 >> 8)`, which is 0.
       for (let j = 0; j < 8; j++) {
         if (byte & (0x80 >> j)) plane[dstRow + width - 1 - (k * 8 + j)] = 255;
       }

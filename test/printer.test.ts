@@ -9,6 +9,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { analyzeInstructions } from '../src/analyze.js';
 import { createJob } from '../src/convert.js';
+import { DiagnosticsRecorder } from '../src/diagnostics.js';
 import {
   BusyError,
   DeviceDisconnectedError,
@@ -42,12 +43,15 @@ function image(width = 696, height = 8): RawImage {
  * answers commands rather than volunteering status — and `print` deliberately
  * discards anything buffered beforehand.
  */
-function makePrinter(readScript: ReadScriptEntry[] = []): {
+function makePrinter(
+  readScript: ReadScriptEntry[] = [],
+  options: { diagnostics?: DiagnosticsRecorder } = {},
+): {
   printer: BrotherQLPrinter;
   device: MockUsbDevice;
 } {
   const device = new MockUsbDevice({ readScript, deferReadsUntilWrite: true });
-  const printer = new BrotherQLPrinter(device, { model: 'QL-820NWB' });
+  const printer = new BrotherQLPrinter(device, { model: 'QL-820NWB', ...options });
   return { printer, device };
 }
 
@@ -127,6 +131,87 @@ describe('printing', () => {
     const printing = progress.filter((p) => p.phase === 'printing');
     expect(printing.at(-1)?.pagesCompleted).toBe(1);
 
+    await printer.close();
+  });
+
+  it('counts copies of every image in the page total it announces', async () => {
+    // The first callback fires before anything is converted, so its page count
+    // is the only estimate a progress bar has to size itself with.
+    const { printer } = makePrinter(successScript(6));
+    await printer.open();
+
+    const progress: PrintProgress[] = [];
+    await printer.print([image(), image()], { label: '62', copies: 3 }, (p) =>
+      progress.push({ ...p }),
+    );
+
+    expect(progress[0]).toEqual({
+      phase: 'converting',
+      bytesSent: 0,
+      bytesTotal: 0,
+      pagesCompleted: 0,
+      pageCount: 6,
+    });
+    expect(progress.every((p) => p.pageCount === 6)).toBe(true);
+
+    await printer.close();
+  });
+
+  it('reports what it is doing to an attached tracer', async () => {
+    const diagnostics = new DiagnosticsRecorder();
+    const { printer } = makePrinter(successScript(), { diagnostics });
+    await printer.open();
+
+    await printer.print([image(), image()], { label: '62', nonBlocking: true });
+    const events = diagnostics
+      .events()
+      .filter((event) => event.category === 'printer')
+      .map((event) => [event.name, event.data] as const);
+
+    expect(events.map(([name]) => name)).toEqual([
+      'convert-start',
+      'convert-done',
+      'send-start',
+    ]);
+    expect(Object.fromEntries(events)['convert-start']).toEqual({
+      model: 'QL-820NWB',
+      label: '62',
+      pages: 2,
+    });
+    expect(Object.fromEntries(events)['convert-done']).toMatchObject({ pages: 2 });
+    expect(Object.fromEntries(events)['convert-done']?.bytes).toBeGreaterThan(0);
+    expect(Object.fromEntries(events)['send-start']).toMatchObject({
+      pageCount: 2,
+      nonBlocking: true,
+    });
+
+    await printer.close();
+  });
+
+  it('records a blocking send as such', async () => {
+    const diagnostics = new DiagnosticsRecorder();
+    const { printer } = makePrinter(successScript(), { diagnostics });
+    await printer.open();
+
+    await printer.print(image(), { label: '62' });
+    const sendStart = diagnostics.events().find((event) => event.name === 'send-start');
+    expect(sendStart?.data).toMatchObject({ nonBlocking: false });
+
+    await printer.close();
+  });
+
+  it('refuses a source that is not an image at all, by name', async () => {
+    // The RawImage test uses `in`, which throws its own TypeError on a
+    // primitive; the guards ahead of it are what make the message name the
+    // missing adapter instead.
+    const { printer } = makePrinter();
+    await printer.open();
+    for (const source of [42, 'a canvas, honest', true, null, undefined]) {
+      await expect(
+        printer.print(source as never, { label: '62' }),
+        String(source),
+      ).rejects.toThrow(/needs the browser adapter/);
+    }
     await printer.close();
   });
 

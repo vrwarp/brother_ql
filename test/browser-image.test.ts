@@ -13,6 +13,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { RawImage } from '../src/image/raw-image.js';
 import type { BrotherQLPrinter, PrintSource } from '../src/printer.js';
 import { enableBrowserImages, toRawImage } from '../src/browser/image-source.js';
+import { FakeImageData, installFakeCanvas, solidPixels } from './util/fake-canvas.js';
 
 function rawImage(width: number, height: number): RawImage {
   const data = new Uint8Array(width * height * 4);
@@ -47,6 +48,39 @@ describe('toRawImage', () => {
     await expect(toRawImage('not an image' as unknown as PrintSource)).rejects.toThrow(
       /Unsupported image source/,
     );
+  });
+
+  it('rejects a primitive source without tripping over it', async () => {
+    // The RawImage test uses `in`, which throws a TypeError of its own on a
+    // primitive — the guards ahead of it are what turn that into the message
+    // that actually names the problem.
+    installFakeCanvas();
+    for (const source of [42, 'a canvas, honest', true, null, undefined]) {
+      await expect(
+        toRawImage(source as unknown as PrintSource),
+        String(source),
+      ).rejects.toThrow(/Unsupported image source\./);
+    }
+  });
+
+  it('keeps transparency in an ImageData it does not have to resize', async () => {
+    // The no-resize path hands the pixels straight back. Routing it through a
+    // canvas instead would flatten it onto white, which is the right thing at
+    // print time but wrong here — `prepareImage` composites later, and doing
+    // it twice loses the alpha a caller may still want.
+    installFakeCanvas();
+    const data = new FakeImageData(solidPixels(2, 1, [10, 20, 30, 40]), 2, 1);
+    const converted = await toRawImage(data as unknown as ImageData);
+    expect(Array.from(converted.data.subarray(0, 4))).toEqual([10, 20, 30, 40]);
+  });
+
+  it('keeps transparency when the target width is already the source width', async () => {
+    // Same shortcut as above, reached the other way: asking for the width the
+    // ImageData already has must not send it through a canvas either.
+    installFakeCanvas();
+    const data = new FakeImageData(solidPixels(2, 1, [10, 20, 30, 40]), 2, 1);
+    const converted = await toRawImage(data as unknown as ImageData, { targetWidth: 2 });
+    expect(Array.from(converted.data.subarray(0, 4))).toEqual([10, 20, 30, 40]);
   });
 
   it('recognises ImageData by its constructor, not by duck typing', async () => {

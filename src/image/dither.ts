@@ -8,10 +8,7 @@
  * merely looking similar.
  */
 
-/** Pillow's `CLIP8` macro. */
-function clip8(v: number): number {
-  return v <= 0 ? 0 : v < 256 ? v : 255;
-}
+import { clip8 } from './clip.js';
 
 /**
  * Dither inverted greyscale data to bi-level.
@@ -27,6 +24,9 @@ export function ditherPlane(
   // One extra slot: the loop reads errors[x + 1] and writes errors[x].
   const errors = new Int32Array(width + 1);
 
+  // Stryker disable next-line EqualityOperator: `y <= height` is equivalent — the
+  // extra row writes past the end of `out`, which is discarded, and the error
+  // terms it leaves behind are never read again.
   for (let y = 0; y < height; y++) {
     const rowStart = y * width;
     let l = 0;
@@ -34,6 +34,11 @@ export function ditherPlane(
     let l1 = 0;
     let x = 0;
 
+    // Stryker disable next-line EqualityOperator: `x <= width` is equivalent. The
+    // extra pass reads `errors[width + 1]`, one past that array, so `l` goes NaN
+    // and clips to 255; the dot it writes lands on the next row's first pixel,
+    // which that row overwrites. It then stores `l + l0` into `errors[width]`
+    // with `l` back at 0 — the same `l0` the loop epilogue would have stored.
     for (; x < width; x++) {
       // pick closest colour
       l = clip8(

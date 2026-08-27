@@ -184,6 +184,9 @@ export function prepareImage(
   let im = image;
 
   if (isEndless(resolvedLabel)) {
+    // Stryker disable next-line ConditionalExpression: the `!== 0` half is a
+    // shortcut, not a condition — `rotateRawImage` returns its argument
+    // untouched for 0 degrees, so letting a zero through changes nothing.
     if (opts.rotate !== 'auto' && opts.rotate !== 0) {
       im = rotateRawImage(im, opts.rotate);
     }
@@ -195,6 +198,11 @@ export function prepareImage(
         { expected: [dotsPrintable[0], im.height], actual: [im.width, im.height] },
       );
     }
+    // Stryker disable next-line ConditionalExpression,EqualityOperator: an
+    // image already the width of the print head is padded onto a canvas of its
+    // own size at x = 0, which is a copy — so widening this test to `<=`, or
+    // dropping it, produces the same pixels. It cannot be reached with a wider
+    // image: the guard above rejects a label that does not fit the head.
     if (im.width < devicePixelWidth) {
       const canvas = createWhiteImage(devicePixelWidth, im.height);
       pasteImage(canvas, im, devicePixelWidth - im.width - rightMarginDots, 0);
@@ -205,8 +213,10 @@ export function prepareImage(
       if (im.width === dotsExpected[1] && im.height === dotsExpected[0]) {
         im = rotateRawImage(im, 90);
       }
-    } else if (opts.rotate !== 0) {
-      im = rotateRawImage(im, opts.rotate);
+    } else {
+      // Stryker disable next-line ConditionalExpression: a shortcut, as on
+      // the endless path above — rotating by 0 returns the same image.
+      if (opts.rotate !== 0) im = rotateRawImage(im, opts.rotate);
     }
     if (im.width !== dotsExpected[0] || im.height !== dotsExpected[1]) {
       throw new RasterError(
@@ -282,8 +292,14 @@ export function convert(
 
   for (const image of images) {
     let page = prepared.get(image);
+    // Stryker disable next-line ConditionalExpression: the cache is an
+    // optimisation over a pure function, so preparing an image again instead
+    // of reusing it produces the same page. Only the time differs, and on a
+    // Raspberry Pi class machine the dither pass dominates a multi-copy job.
     if (!page) {
       page = prepareImage(image, raster.model, resolvedLabel, options);
+      // Stryker disable next-line CallExpression: as above — never filling the
+      // cache costs time, not correctness.
       prepared.set(image, page);
     }
 

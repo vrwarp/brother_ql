@@ -6,7 +6,7 @@
  * over plain HTTP, or a dismissed device chooser.
  */
 
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { NotSupportedError, SelectionCancelledError } from '../src/errors.js';
 import {
@@ -171,6 +171,91 @@ describe('watchConnectionEvents', () => {
   it('is a no-op without WebUSB', () => {
     vi.stubGlobal('navigator', {});
     expect(() => watchConnectionEvents({})()).not.toThrow();
+  });
+
+  it('tolerates an empty handler set for both events', () => {
+    // A caller watching only for connects still gets disconnect events; the
+    // absent handler must not turn one into a TypeError inside the listener,
+    // where nothing can catch it.
+    const usb = stubUsb();
+    watchConnectionEvents({});
+    const brother = { device: device(BROTHER_VENDOR_ID) } as unknown as Event;
+    for (const [, handler] of usb.addEventListener.mock.calls) {
+      expect(() => (handler as (event: Event) => void)(brother)).not.toThrow();
+    }
+  });
+
+  it('ignores a disconnected device from another vendor', () => {
+    const usb = stubUsb();
+    const disconnect = vi.fn();
+    watchConnectionEvents({ disconnect });
+    const handler = usb.addEventListener.mock.calls.find(
+      (call) => call[0] === 'disconnect',
+    )?.[1] as (event: Event) => void;
+
+    handler({ device: device(0x1234) } as unknown as Event);
+    expect(disconnect).not.toHaveBeenCalled();
+  });
+
+  it('unsubscribes the very listeners it added, by name', () => {
+    const usb = stubUsb();
+    const unsubscribe = watchConnectionEvents({ connect: vi.fn() });
+    unsubscribe();
+
+    expect(usb.removeEventListener).toHaveBeenCalledTimes(2);
+    for (const type of ['connect', 'disconnect']) {
+      const added = usb.addEventListener.mock.calls.find((call) => call[0] === type);
+      expect(usb.removeEventListener).toHaveBeenCalledWith(type, added?.[1]);
+    }
+  });
+});
+
+describe('environments without a navigator at all', () => {
+  /**
+   * Every other test in this file installs a stub `navigator`, so the guards
+   * that check whether one exists were never taken. They matter: this package
+   * is imported under Node by its own test suite and by anything doing
+   * server-side rendering, where reaching for `navigator.usb` is a
+   * ReferenceError rather than a graceful "not supported".
+   */
+  beforeEach(() => {
+    vi.stubGlobal('navigator', undefined);
+    vi.stubGlobal('isSecureContext', undefined);
+  });
+
+  it('reports WebUSB as unsupported instead of throwing', () => {
+    expect(isWebUsbSupported()).toBe(false);
+  });
+
+  it('rejects a device request with the typed error', async () => {
+    await expect(requestPrinterDevice()).rejects.toBeInstanceOf(NotSupportedError);
+    await expect(requestPrinterDevice()).rejects.toThrow(/not available in this browser/);
+  });
+
+  it('reports no paired devices', async () => {
+    await expect(getPairedPrinterDevices()).resolves.toEqual([]);
+  });
+
+  it('watches nothing, and unsubscribing is still safe', () => {
+    expect(() => watchConnectionEvents({ connect: vi.fn() })()).not.toThrow();
+  });
+});
+
+describe('embedders without isSecureContext', () => {
+  /**
+   * `isSecureContext` is a browser global. An embedder that exposes
+   * `navigator.usb` without it — a WebView shell, a test harness — is taken at
+   * its word rather than being told its context is insecure, which would be
+   * unactionable advice about a global it does not have.
+   */
+  it('treats a missing isSecureContext as secure', async () => {
+    const usb = stubUsb();
+    vi.stubGlobal('isSecureContext', undefined);
+    const chosen = device(BROTHER_VENDOR_ID);
+    usb.requestDevice.mockResolvedValue(chosen);
+
+    expect(isWebUsbSupported()).toBe(true);
+    await expect(requestPrinterDevice()).resolves.toBe(chosen);
   });
 });
 

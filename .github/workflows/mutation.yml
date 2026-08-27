@@ -1,0 +1,84 @@
+name: Mutation testing
+
+# Stryker rewrites every operator, literal and branch in src/ one at a time and
+# re-runs the suite against each — around 2800 mutants. That is far too slow to
+# gate every push, so it runs weekly and on demand, and `npm test` stays the
+# fast gate.
+on:
+  schedule:
+    # Mondays, 04:00 UTC.
+    - cron: '0 4 * * 1'
+  workflow_dispatch:
+    inputs:
+      shard:
+        description: 'Run one shard only (see scripts/mutation-shards.mjs)'
+        required: false
+        type: string
+
+jobs:
+  # One job per shard. Sharding is not only for parallelism: a sweep that
+  # instruments all of src/ at once runs the suite about ten times slower, and
+  # pays that for every static mutant in the model and label tables. See
+  # scripts/mutation-shards.mjs.
+  shard:
+    name: ${{ matrix.shard }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        shard:
+          - image-tone
+          - image-grayscale-head
+          - image-grayscale-tail
+          - image-pack
+          - image-raw
+          - packbits
+          - analyze
+          - convert-raster
+          - tables
+          - status-diagnostics
+          - printer
+          - usb
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - if: inputs.shard == '' || inputs.shard == matrix.shard
+        run: node scripts/mutation-sweep.mjs --shard ${{ matrix.shard }}
+
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mutation-${{ matrix.shard }}
+          path: reports/mutation/shards/
+          if-no-files-found: ignore
+          retention-days: 30
+
+  # The shards each enforce the threshold on their own slice; this is the
+  # number that actually counts, and the one the README quotes.
+  summary:
+    name: Mutation score
+    needs: shard
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: mutation-*
+          merge-multiple: true
+          path: reports/mutation/shards
+
+      - run: node scripts/mutation-summary.mjs

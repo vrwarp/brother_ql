@@ -68,6 +68,56 @@ describe('ByteWriter', () => {
     expect(writer.toUint8Array().at(-1)).toBe(7);
   });
 
+  it('starts at the requested capacity, with a floor under it', () => {
+    // The floor keeps a writer asked for nothing at all from reallocating on
+    // every push; the requested size is honoured above it.
+    expect(new ByteWriter().capacity).toBe(1024);
+    expect(new ByteWriter(4096).capacity).toBe(4096);
+    expect(new ByteWriter(4).capacity).toBe(16);
+    expect(new ByteWriter(0).capacity).toBe(16);
+  });
+
+  it('does not reallocate for a write that exactly fills the buffer', () => {
+    const writer = new ByteWriter(16);
+    writer.write(new Uint8Array(16));
+    expect(writer.capacity).toBe(16);
+    expect(writer.length).toBe(16);
+  });
+
+  it('doubles until the write fits, and no further', () => {
+    const writer = new ByteWriter(16);
+    writer.write(new Uint8Array(17));
+    expect(writer.capacity).toBe(32);
+
+    const bigger = new ByteWriter(16);
+    bigger.write(new Uint8Array(300));
+    expect(bigger.capacity).toBe(512);
+
+    // A write landing exactly on a doubling stops there rather than taking
+    // one more, which would leave half the buffer permanently unused.
+    const exact = new ByteWriter(16);
+    exact.write(new Uint8Array(32));
+    expect(exact.capacity).toBe(32);
+  });
+
+  it('fills past the end of the buffer by growing first', () => {
+    // `Uint8Array.fill` clamps to the array's bounds, so a fill that outran
+    // the buffer would silently write fewer bytes than the length claims.
+    const writer = new ByteWriter(16);
+    writer.fill(0xab, 100);
+    expect(writer.capacity).toBeGreaterThanOrEqual(100);
+    expect(writer.length).toBe(100);
+    expect(Array.from(writer.toUint8Array())).toEqual(Array(100).fill(0xab));
+  });
+
+  it('fills forwards from the current end', () => {
+    const writer = new ByteWriter();
+    writer.push(0x01);
+    writer.fill(0xcd, 3);
+    writer.push(0x02);
+    expect(Array.from(writer.toUint8Array())).toEqual([0x01, 0xcd, 0xcd, 0xcd, 0x02]);
+  });
+
   it('returns a copy, not a view of the internal buffer', () => {
     const writer = new ByteWriter();
     writer.push(1, 2, 3);

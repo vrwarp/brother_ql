@@ -11,9 +11,7 @@
  * All three outputs are byte-ranged (0..255), not degrees or percent.
  */
 
-function clip8(v: number): number {
-  return v <= 0 ? 0 : v < 256 ? v : 255;
-}
+import { clip8 } from './clip.js';
 
 export interface HsvPlanes {
   readonly h: Uint8Array;
@@ -28,6 +26,9 @@ export function rgbToHsvPlanes(rgb: Uint8Array): HsvPlanes {
   const s = new Uint8Array(count);
   const v = new Uint8Array(count);
 
+  // Stryker disable next-line EqualityOperator: `p <= count` is equivalent — the
+  // extra pass reads past the end of `rgb` and writes past the end of h/s/v,
+  // and out-of-range writes to a Uint8Array are discarded.
   for (let i = 0, p = 0; p < count; i += 3, p++) {
     const r = rgb[i] as number;
     const g = rgb[i + 1] as number;
@@ -60,7 +61,10 @@ export function rgbToHsvPlanes(rgb: Uint8Array): HsvPlanes {
     }
 
     // The C code evaluates this in double precision and stores back to a float.
-    hue = Math.fround(((hue / 6.0 + 1.0) % 1.0) + 0);
+    // `hue` is at least -1 here, so `hue / 6 + 1` is positive and the remainder
+    // cannot come back as -0; the C source's `+ 0` normalising that away has
+    // nothing to do and is left out.
+    hue = Math.fround((hue / 6.0 + 1.0) % 1.0);
 
     h[p] = clip8(Math.trunc(hue * 255.0));
     s[p] = clip8(Math.trunc(sat * 255.0));

@@ -56,6 +56,13 @@ Changes to the Python package are not tracked here.
   recovery, mid-job unplugs and reconnects on the same object.
 - **Benchmarks** (`npm run bench`) for the hot paths, and complexity-guard tests
   with ceilings a Raspberry Pi passes easily but an accidental O(n²) cannot.
+- **Mutation testing** (`npm run mutation`) with StrykerJS, at a 100% score.
+  Every operator, literal and branch in `src/` is rewritten one at a time and
+  the suite re-run against it, so the tests are checked for noticing a wrong
+  line rather than merely running it. Of 2820 mutants 2678 are killed; the
+  remaining 142 are equivalent — no test can distinguish them — and each carries
+  a `// Stryker disable` comment in the source arguing why. The sweep is sharded
+  (`scripts/mutation-shards.mjs`) and runs weekly in CI.
 - **Hardware diagnostics page** at `/diagnostics/` on the deployed demo site: a
   guided, step-by-step wizard that captures everything needed to validate the
   library against a real printer — environment, USB descriptor tree, model
@@ -85,6 +92,18 @@ Changes to the Python package are not tracked here.
 
 ### Fixed
 
+- `ByteWriter.fill()` did not grow the buffer before filling it. `Uint8Array.fill`
+  clamps to the array's bounds, so an overrunning fill wrote fewer bytes than the
+  length then claimed and `toUint8Array()` padded the difference with zeros. Only
+  reachable through a raster preamble longer than the initial capacity.
+  (Found by mutation testing.)
+- `DiagnosticsRecorder` dereferenced the `performance` global on every event
+  instead of capturing the clock once, which costs more on a path documented as
+  free and throws outright if an embedder replaces the global while a recorder is
+  live. (Found by mutation testing.)
+- `DeviceDisconnectedError` dropped the underlying failure it was given, losing
+  the only thing that said *how* the device went away.
+  (Found by mutation testing.)
 - A page completion arriving while later pages were still being transmitted was
   drained and discarded, so a fast printer could finish every page and the job
   would still time out. Confirmations are now counted wherever they arrive.

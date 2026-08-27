@@ -79,7 +79,14 @@ type TransportState = 'closed' | 'open' | 'closing' | 'dead';
 export function detectPlatform(): PlatformHint {
   const nav: { userAgent?: string; platform?: string } | undefined =
     typeof navigator === 'undefined' ? undefined : navigator;
+  // Stryker disable next-line StringLiteral: the two empty defaults are
+  // equivalent to any other filler — whatever stands in for a missing field
+  // has to be matched against the platform keywords below, and no substitute
+  // Stryker generates contains one.
   const agent = `${nav?.userAgent ?? ''} ${nav?.platform ?? ''}`.toLowerCase();
+  // Stryker disable next-line ConditionalExpression,MethodExpression: an early
+  // exit only. An agent string that is empty or blank matches none of the
+  // keywords below and falls through to the same 'unknown'.
   if (!agent.trim()) return 'unknown';
   if (agent.includes('android')) return 'android';
   if (agent.includes('win')) return 'windows';
@@ -123,7 +130,8 @@ export class UsbTransport extends TypedEventTarget<TransportEvents> {
   #endpointIn: USBEndpoint | null = null;
   #endpointOut: USBEndpoint | null = null;
   #partial = new Uint8Array(0);
-  #readerDone: Promise<void> | null = null;
+  /** Resolves when the reader loop has stopped. Already resolved while closed. */
+  #readerDone: Promise<void> = Promise.resolve();
   #openPromise: Promise<void> | null = null;
   #closePromise: Promise<void> | null = null;
 
@@ -309,6 +317,9 @@ export class UsbTransport extends TypedEventTarget<TransportEvents> {
    */
   async #readLoop(): Promise<void> {
     const endpoint = this.#endpointIn;
+    // Stryker disable next-line ConditionalExpression: unreachable. The reader
+    // is started by #openSteps, which assigns both endpoints a few lines
+    // earlier and throws rather than continuing without them.
     if (!endpoint) return;
     const requestLength = Math.max(endpoint.packetSize || 0, STATUS_PACKET_LENGTH);
 
@@ -335,7 +346,11 @@ export class UsbTransport extends TypedEventTarget<TransportEvents> {
         }
         continue;
       }
-      if (!result.data || result.data.byteLength === 0) continue;
+      if (!result.data) continue;
+      // Stryker disable next-line ConditionalExpression: a transfer carrying
+      // an empty buffer is already a no-op below — the slice is empty, the
+      // partial buffer is unchanged — so skipping it early only saves work.
+      if (result.data.byteLength === 0) continue;
 
       const incoming = new Uint8Array(
         result.data.buffer,
@@ -343,6 +358,9 @@ export class UsbTransport extends TypedEventTarget<TransportEvents> {
         result.data.byteLength,
       );
       let buffer: Uint8Array;
+      // Stryker disable next-line ConditionalExpression: taking the general
+      // path with an empty partial buffer copies `incoming` into a buffer of
+      // its own length, which holds the same bytes. This only avoids the copy.
       if (this.#partial.length === 0) {
         buffer = incoming;
       } else {
@@ -392,6 +410,10 @@ export class UsbTransport extends TypedEventTarget<TransportEvents> {
       throw new DeviceDisconnectedError();
     }
     const endpoint = this.#endpointOut;
+    // Stryker disable next-line ConditionalExpression,StringLiteral,CallExpression:
+    // unreachable for the same reason as the reader's check — the state test
+    // above already established that #openSteps completed, which assigns this
+    // endpoint.
     if (!endpoint) throw new InterfaceClaimError('The printer has no output endpoint.');
 
     this.#diag?.event('transport', 'write-start', { bytes: data.length });
@@ -482,7 +504,10 @@ export class UsbTransport extends TypedEventTarget<TransportEvents> {
       this.#diag?.event('transport', 'disconnect', { during: 'write', error: String(error) });
       throw new DeviceDisconnectedError(error);
     } finally {
-      if (timer !== undefined) clearTimeout(timer);
+      // `clearTimeout(undefined)` is a defined no-op, so this needs no guard —
+      // and it must run on every path out, or a job's worth of watchdogs keeps
+      // the event loop alive after the job is done.
+      clearTimeout(timer);
     }
   }
 
@@ -505,9 +530,17 @@ export class UsbTransport extends TypedEventTarget<TransportEvents> {
 
   async #doClose(): Promise<void> {
     const wasOpen = this.#state === 'open';
+    // Stryker disable next-line StringLiteral: 'closing' is a state no test
+    // asks about — everything that reads #state during a close asks whether it
+    // is 'open', and any value other than that behaves identically. It is
+    // named for the reader, and to keep the union honest.
     this.#state = 'closing';
     this.#diag?.event('transport', 'close-start', {});
 
+    // Stryker disable next-line ConditionalExpression: the null check cannot
+    // come out false while `wasOpen` is true — #openSteps assigns the
+    // interface number before it sets the state to 'open'. It is kept for the
+    // type, which admits null.
     if (wasOpen && this.#interfaceNumber !== null) {
       // Releasing can fail while a transfer is parked; closing below is what
       // actually unparks the reader, so a failure here is not fatal.
@@ -515,20 +548,19 @@ export class UsbTransport extends TypedEventTarget<TransportEvents> {
     }
     await this.device.close().catch(() => {});
 
-    if (this.#readerDone) {
-      // Closing rejects the parked transfer, which ends the reader. Cap the
-      // wait anyway so a misbehaving device cannot hang the caller — and
-      // clear the cap afterwards so the timer does not outlive the close.
-      let cap: ReturnType<typeof setTimeout> | undefined;
-      await Promise.race([
-        this.#readerDone.catch(() => {}),
-        new Promise<void>((resolve) => {
-          cap = setTimeout(resolve, 2000);
-        }),
-      ]);
-      if (cap !== undefined) clearTimeout(cap);
-      this.#readerDone = null;
-    }
+    // Closing rejects the parked transfer, which ends the reader. Cap the
+    // wait anyway so a misbehaving device cannot hang the caller — and clear
+    // the cap afterwards so the timer does not outlive the close.
+    // (`clearTimeout(undefined)` is a no-op, so the clear needs no guard.)
+    let cap: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([
+      this.#readerDone.catch(() => {}),
+      new Promise<void>((resolve) => {
+        cap = setTimeout(resolve, 2000);
+      }),
+    ]);
+    clearTimeout(cap);
+    this.#readerDone = Promise.resolve();
 
     this.#state = 'closed';
     this.#interfaceNumber = null;

@@ -41,6 +41,9 @@ export function splitRedBlack(img: RawImage, threshold: number): RedBlackPlanes 
   const black = new Uint8Array(count);
   const red = new Uint8Array(count);
 
+  // Stryker disable next-line EqualityOperator: `i <= count` is equivalent — the
+  // extra pass reads past the end of the HSV planes and writes past the end of
+  // `black` and `red`, and out-of-range writes to a Uint8Array are discarded.
   for (let i = 0; i < count; i++) {
     const hue = h[i] as number;
     const sat = s[i] as number;

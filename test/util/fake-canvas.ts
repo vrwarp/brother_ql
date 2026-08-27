@@ -42,6 +42,16 @@ function isSampleable(value: unknown): value is Sampleable {
   );
 }
 
+/**
+ * Every context handed out since the last `installFakeCanvas()`.
+ *
+ * The module under test creates its own canvases, so this is the only way to
+ * see how it configured them — which matters for the resampling settings, the
+ * one part of the drawing this fake cannot reproduce and therefore cannot
+ * check by comparing pixels.
+ */
+const createdContexts: FakeContext2D[] = [];
+
 export class FakeContext2D {
   imageSmoothingEnabled = false;
   imageSmoothingQuality = 'low';
@@ -51,6 +61,7 @@ export class FakeContext2D {
 
   constructor(readonly canvas: FakeCanvasBase) {
     this.pixels = new Uint8ClampedArray(canvas.width * canvas.height * 4);
+    createdContexts.push(this);
   }
 
   fillRect(x: number, y: number, width: number, height: number): void {
@@ -188,6 +199,8 @@ export class FakeHTMLImageElement implements Sampleable {
 export interface FakeCanvasWorld {
   /** Bitmaps handed out by the stubbed `createImageBitmap`, for asserting `close()`. */
   bitmaps: FakeImageBitmap[];
+  /** Every 2D context created since installation, in order. */
+  contexts: FakeContext2D[];
   /** Pixels the next `createImageBitmap(blob)` call decodes to. */
   setBlobPixels(width: number, height: number, pixels: FakeImageData['data']): void;
 }
@@ -200,6 +213,7 @@ export interface FakeCanvasWorld {
  */
 export function installFakeCanvas(options: { offscreen?: boolean } = {}): FakeCanvasWorld {
   FakeCanvasBase.failContexts = false;
+  createdContexts.length = 0;
   vi.stubGlobal('ImageData', FakeImageData);
   vi.stubGlobal('ImageBitmap', FakeImageBitmap);
   vi.stubGlobal('HTMLImageElement', FakeHTMLImageElement);
@@ -219,6 +233,7 @@ export function installFakeCanvas(options: { offscreen?: boolean } = {}): FakeCa
 
   const world: FakeCanvasWorld & { blobPixels: FakeImageData | null } = {
     bitmaps: [],
+    contexts: createdContexts,
     blobPixels: null,
     setBlobPixels(width, height, pixels) {
       this.blobPixels = new FakeImageData(pixels, width, height);

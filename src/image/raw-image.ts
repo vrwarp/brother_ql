@@ -81,6 +81,9 @@ export function pasteImage(dst: RawImage, src: RawImage, x: number, y: number): 
     );
   }
   const rowBytes = src.width * 4;
+  // Stryker disable next-line EqualityOperator: `row <= src.height` is
+  // equivalent — the extra row's `subarray` starts past the end of the source
+  // and is therefore empty, so the copy writes nothing.
   for (let row = 0; row < src.height; row++) {
     const dstY = y + row;
     if (dstY < 0 || dstY >= dst.height) continue;
@@ -109,6 +112,10 @@ export function rotateRawImage(img: RawImage, degrees: RotationAngle): RawImage 
   const out = new Uint8Array(rotated.width * rotated.height * 4);
 
   for (let y = 0; y < h; y++) {
+    // Stryker disable next-line EqualityOperator: `x <= w` is equivalent. The
+    // extra column's destination is either outside `out` (90 and 270 degrees)
+    // or the last pixel of an earlier row (180 degrees), which a later
+    // iteration overwrites — rows are filled in ascending order.
     for (let x = 0; x < w; x++) {
       const src = (y * w + x) * 4;
       let dx: number;
@@ -149,11 +156,20 @@ export function halveWidth(img: RawImage): RawImage {
   requireConsistent(img, 'halveWidth');
   const outWidth = Math.floor(img.width / 2);
   const out = new Uint8Array(outWidth * img.height * 4);
+  // Stryker disable next-line EqualityOperator: `y <= img.height` is
+  // equivalent — the extra row writes past the end of `out`, and JavaScript
+  // discards out-of-range writes to a typed array.
   for (let y = 0; y < img.height; y++) {
+    // Stryker disable next-line EqualityOperator: `x <= outWidth` is
+    // equivalent — the extra column writes the next row's first pixel, which
+    // the next iteration overwrites, and falls off the end on the last row.
     for (let x = 0; x < outWidth; x++) {
       const a = (y * img.width + x * 2) * 4;
       const b = a + 4;
       const dst = (y * outWidth + x) * 4;
+      // Stryker disable next-line EqualityOperator: `c <= 4` is equivalent —
+      // the fifth channel writes the next pixel's red byte, which the next
+      // iteration overwrites, and falls off the end on the last pixel.
       for (let c = 0; c < 4; c++) {
         out[dst + c] = ((img.data[a + c] as number) + (img.data[b + c] as number)) >> 1;
       }

@@ -30,6 +30,10 @@ export function computeThreshold(percent: number): number {
  */
 export function thresholdPlane(invertedGray: Uint8Array, threshold: number): Uint8Array {
   const out = new Uint8Array(invertedGray.length);
+  // Stryker disable next-line EqualityOperator: `i <= out.length` is equivalent.
+  // The extra pass reads `invertedGray[out.length]` as undefined, compares false
+  // and writes 255 one past the end of a Uint8Array, which JavaScript discards.
+  // No observation of `out` can tell the two apart.
   for (let i = 0; i < out.length; i++) {
     out[i] = (invertedGray[i] as number) < threshold ? 0 : 255;
   }
