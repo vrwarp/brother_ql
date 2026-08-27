@@ -209,11 +209,26 @@ describe('geometry failures name the numbers involved', () => {
     expect(() => raster.addMargins(0x10000)).toThrow(
       /Feed margin must be an integer between 0 and 65535, got 65536\./,
     );
-    raster.mwidth = 300;
-    expect(() => raster.addMediaAndQuality(1)).toThrow(
-      /Media width must be an integer between 0 and 255, got 300\./,
-    );
     expect(() => raster.addCutEvery(2.5)).toThrow(/Cut-every count must be an integer, got 2\.5\./);
+  });
+
+  it('names each media field that will not fit its byte', () => {
+    // All three go out in the same command, so the message is the only thing
+    // that says which one the caller got wrong.
+    for (const [field, name] of [
+      ['mtype', 'Media type'],
+      ['mwidth', 'Media width'],
+      ['mlength', 'Media length'],
+    ] as const) {
+      const raster = new BrotherQLRaster('QL-700');
+      raster[field] = 300;
+      expect(() => raster.addMediaAndQuality(1)).toThrow(
+        new RegExp(`${name} must be an integer between 0 and 255, got 300\\.`),
+      );
+      // The others are left unset, so nothing else can be the culprit.
+      raster[field] = 0;
+      expect(() => raster.addMediaAndQuality(1)).not.toThrow();
+    }
   });
 
   it('names the two plane sizes that did not agree', () => {

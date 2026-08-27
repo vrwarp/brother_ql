@@ -7,6 +7,8 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { RasterError, UnsupportedCommandError } from '../src/errors.js';
 import { packMirroredPlane } from '../src/image/pack.js';
+import type { BitImage } from '../src/image/raw-image.js';
+import { getModel, type Model } from '../src/models.js';
 import { BrotherQLRaster } from '../src/raster.js';
 import { bytesToHex } from './util/fixtures.js';
 
@@ -205,5 +207,108 @@ describe('raster data', () => {
     const black = plane(720);
     const red = packMirroredPlane(new Uint8Array(720 * (rows + 1)), 720, rows + 1);
     expect(() => r.addRasterData(black, red)).toThrow(/same dimensions/);
+  });
+
+  it('rejects colour planes that differ in width as well as in height', () => {
+    // The first plane is already pinned to the print head width, so a width
+    // mismatch can only come from the second — and interleaving rows read at
+    // two different strides would put the red plane out of registration with
+    // the black one rather than fail.
+    const r = raster('QL-820NWB');
+    const narrow = packMirroredPlane(new Uint8Array(712 * rows), 712, rows);
+    expect(() => r.addRasterData(plane(720), narrow)).toThrow(
+      /same dimensions: 720x4 vs 712x4/,
+    );
+  });
+});
+
+describe('command defaults', () => {
+  /**
+   * `convert` sets every one of these explicitly, so the declared defaults are
+   * only ever seen by a caller driving the builder itself — which is the
+   * documented way to emit a job command by command.
+   */
+  it('starts with the documented flag defaults', () => {
+    const r = new BrotherQLRaster('QL-820NWB');
+    expect(r.pquality).toBe(true);
+    expect(r.cutAtEnd).toBe(true);
+    expect(r.dpi600).toBe(false);
+    expect(r.twoColorPrinting).toBe(false);
+    expect(r.compressionEnabled).toBe(false);
+
+    // Cut at end (bit 3) and nothing else.
+    r.addExpandedMode();
+    expect(bytesToHex(r.data)).toBe('1b694b08');
+  });
+
+  it('turns auto cut off when asked for no argument at all', () => {
+    const r = raster('QL-820NWB');
+    r.addAutocut();
+    expect(bytesToHex(r.data)).toBe('1b694d00');
+  });
+
+  it('turns compression on when asked for no argument at all', () => {
+    const r = raster('QL-820NWB');
+    expect(r.compressionEnabled).toBe(false);
+    r.addCompression();
+    expect(r.compressionEnabled).toBe(true);
+    expect(bytesToHex(r.data)).toBe('4d02');
+  });
+});
+
+describe('row length framing beyond the shipping models', () => {
+  /**
+   * Every model in the table has a row that fits its length field several
+   * times over — 162 bytes at the widest, and PackBits cannot expand that past
+   * 216 — so neither the guards nor the high byte of the P-touch length can be
+   * reached with a real printer. `BrotherQLRaster` accepts a `Model` object as
+   * well as an identifier, which is the documented way to describe a printer
+   * the table does not know, so a hypothetical wider one reaches them.
+   */
+  const wide = (numberBytesPerRow: number, family: 'QL' | 'PT'): Model =>
+    ({
+      ...getModel(family === 'PT' ? 'PT-P900W' : 'QL-1100'),
+      identifier: `TEST-${family}-${numberBytesPerRow}`,
+      numberBytesPerRow,
+      family,
+    }) as Model;
+
+  const emptyPlane = (rowBytes: number, height: number): BitImage => ({
+    width: rowBytes * 8,
+    height,
+    rowBytes,
+    data: new Uint8Array(rowBytes * height),
+  });
+
+  it('writes a P-touch row length above 255 as little endian', () => {
+    // 300 bytes is 0x012C: 2C in the low byte, 01 in the high one. No shipping
+    // P-touch model has a row past 70 bytes, so that high byte is always zero
+    // in practice and any arithmetic would do.
+    const r = new BrotherQLRaster(wide(300, 'PT'));
+    r.addRasterData(emptyPlane(300, 1));
+    expect(bytesToHex(r.data.subarray(0, 3))).toBe('472c01');
+    expect(r.data.length).toBe(3 + 300);
+  });
+
+  it('refuses a P-touch row that its 16 bit length cannot carry', () => {
+    const r = new BrotherQLRaster(wide(0x1_0000, 'PT'));
+    expect(() => r.addRasterData(emptyPlane(0x1_0000, 1))).toThrow(
+      /Raster row length must be an integer between 0 and 65535, got 65536\./,
+    );
+  });
+
+  it('refuses a QL row that its single length byte cannot carry', () => {
+    const r = new BrotherQLRaster(wide(256, 'QL'));
+    expect(() => r.addRasterData(emptyPlane(256, 1))).toThrow(
+      /Raster row length must be an integer between 0 and 255, got 256\./,
+    );
+  });
+
+  it('refuses an oversized row on the two colour path too', () => {
+    const model = { ...wide(256, 'QL'), twoColor: true } as Model;
+    const r = new BrotherQLRaster(model);
+    expect(() => r.addRasterData(emptyPlane(256, 1), emptyPlane(256, 1))).toThrow(
+      /Raster row length must be an integer between 0 and 255, got 256\./,
+    );
   });
 });
