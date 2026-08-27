@@ -34,6 +34,23 @@ describe('opcode table', () => {
     }
   });
 
+  it('has no signature that is a prefix of another', () => {
+    // This is what makes at most one opcode match at any offset, which is the
+    // assumption the Python reader asserts outright
+    // (`assert len(matching_opcodes) == 1`). The tie-break in matchOpcode is
+    // unreachable while it holds; adding an opcode that broke it would make
+    // the table ambiguous, and this is where that shows up.
+    for (const a of OPCODES) {
+      for (const b of OPCODES) {
+        if (a === b) continue;
+        const shorter = a.signature.length <= b.signature.length ? a : b;
+        const longer = shorter === a ? b : a;
+        const isPrefix = shorter.signature.every((byte, i) => byte === longer.signature[i]);
+        expect(isPrefix, `${shorter.name} is a prefix of ${longer.name}`).toBe(false);
+      }
+    }
+  });
+
   it('prefers the longest matching signature', () => {
     // ESC i U w 01 (amedia) and ESC i U J (jobid) share a three byte prefix,
     // and both start with ESC. The longer match has to win.
@@ -158,6 +175,23 @@ describe('describeInstruction', () => {
   it('shows a short payload inline', () => {
     const [instruction] = analyzeInstructions(Uint8Array.from([0x1b, 0x69, 0x4b, 0x09]));
     expect(describeInstruction(instruction!)).toBe('@0 expanded [09]');
+  });
+
+  it('shows exactly twelve payload bytes inline, and truncates at thirteen', () => {
+    // A QL raster row of n bytes carries an n + 2 byte payload, so a ten byte
+    // row lands exactly on the limit and an eleven byte row is the first over.
+    const row = (n: number): Uint8Array =>
+      Uint8Array.from([0x67, 0x00, n, ...Array.from({ length: n }, (_v, i) => i + 1)]);
+
+    const [twelve] = analyzeInstructions(row(10));
+    expect(twelve?.payload.length).toBe(12);
+    expect(describeInstruction(twelve!)).toBe('@0 raster QL [00 0A 01 02 03 04 05 06 07 08 09 0A]');
+
+    const [thirteen] = analyzeInstructions(row(11));
+    expect(thirteen?.payload.length).toBe(13);
+    expect(describeInstruction(thirteen!)).toBe(
+      '@0 raster QL [00 0B 01 02 03 04 05 06 07 08 09 0A ... (13 bytes)]',
+    );
   });
 
   it('summarises a long payload instead of printing all of it', () => {

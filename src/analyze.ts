@@ -56,6 +56,11 @@ export interface Instruction {
 function matchOpcode(data: Uint8Array, offset: number): OpcodeDefinition | undefined {
   let best: OpcodeDefinition | undefined;
   for (const opcode of OPCODES) {
+    // Stryker disable next-line ConditionalExpression,ArithmeticOperator: this
+    // guard is an early exit, not a correctness check. Without it the
+    // comparison below reads undefined past the end of the data, which fails
+    // to equal any signature byte, so a signature that runs off the end never
+    // matches either way.
     if (offset + opcode.signature.length > data.length) continue;
     let matches = true;
     for (let i = 0; i < opcode.signature.length; i++) {
@@ -64,7 +69,15 @@ function matchOpcode(data: Uint8Array, offset: number): OpcodeDefinition | undef
         break;
       }
     }
-    // Longer signatures win, so `ESC i U w 01` is preferred over `ESC i U J`.
+    // Longer signatures win, so `ESC i U w 01` would be preferred over a
+    // shorter opcode sharing its prefix.
+    //
+    // Stryker disable next-line ConditionalExpression,EqualityOperator: no two
+    // opcodes in the table can match at one offset, because none of their
+    // signatures is a prefix of another — `test/analyze.test.ts` asserts that
+    // directly. So `best` is only ever assigned once and the comparison never
+    // runs. It is kept because the alternative is that a future opcode sharing
+    // a prefix silently resolves by table order.
     if (matches && (!best || opcode.signature.length > best.signature.length)) best = opcode;
   }
   return best;
@@ -93,14 +106,25 @@ export function* chunkInstructions(data: Uint8Array): Generator<Instruction> {
     }
 
     let length = opcode.signature.length;
-    if (opcode.following > 0) {
+    // `-1` is the table's sentinel for "derived from the data"; every other
+    // value is the payload length, including zero. Tested as the sentinel
+    // rather than as `> 0` so that the two cannot be confused.
+    if (opcode.following !== -1) {
       length += opcode.following;
     } else if (opcode.name === 'raster QL' || opcode.name === '2-color raster QL') {
       // 67 00 <len> <data> and 77 <colour> <len> <data>
       length += (data[offset + 2] ?? 0) + 2;
-    } else if (opcode.name === 'raster P-touch') {
-      // 47 <len lo> <len hi> <data>
-      length += (data[offset + 1] ?? 0) + (data[offset + 2] ?? 0) * 256 + 2;
+    } else {
+      // P-touch raster is the only other opcode in the table with a derived
+      // length, so this test cannot come out false — it is named rather than
+      // assumed so that a fourth derived-length opcode would not silently pick
+      // up the P-touch framing.
+      // Stryker disable next-line ConditionalExpression: unreachable as false,
+      // for the reason above.
+      if (opcode.name === 'raster P-touch') {
+        // 47 <len lo> <len hi> <data>
+        length += (data[offset + 1] ?? 0) + (data[offset + 2] ?? 0) * 256 + 2;
+      }
     }
 
     const end = Math.min(offset + length, data.length);
@@ -135,6 +159,9 @@ export function isRasterInstruction(instruction: Instruction): boolean {
  * @param compressed Whether the job had compression enabled at this point.
  */
 export function rasterRowBytes(instruction: Instruction, compressed: boolean): Uint8Array {
+  // Stryker disable next-line StringLiteral,ConditionalExpression: naming the
+  // case is documentation, not control flow — a zero raster carries no payload,
+  // so falling through returns an empty row anyway, decompressed or not.
   if (instruction.name === 'zero raster') return new Uint8Array(0);
   // Two bytes of framing precede the row in every variant: `00 <len>` for QL,
   // `<colour> <len>` for two colour, `<len lo> <len hi>` for P-touch.
@@ -180,6 +207,13 @@ export function summarizeJob(data: Uint8Array): string[] {
       continue;
     }
     if (isRasterInstruction(instruction)) {
+      // Stryker disable next-line ConditionalExpression,CallExpression: dropping this flush
+      // changes no output, so it reads as dead — but only because `flush`
+      // always emits the preamble line before the raster one, which happens to
+      // put the two runs in the right order even when they overlap. The mirror
+      // of this line in the preamble branch above is *not* redundant, since a
+      // raster run that started first would be reported second. Kept for that
+      // symmetry, and so the two branches cannot drift apart.
       if (preambleRun > 0) flush();
       rasterRun += 1;
       rasterBytes += instruction.bytes.length;
