@@ -12,7 +12,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { clip8 } from '../src/image/clip.js';
-import { rgbToGray } from '../src/image/grayscale.js';
+import { compositeOnWhite, rgbToGray } from '../src/image/grayscale.js';
 import { splitRedBlack } from '../src/image/red-black.js';
 import { computeThreshold } from '../src/image/threshold.js';
 import type { RawImage } from '../src/image/raw-image.js';
@@ -101,5 +101,58 @@ describe('red/black separation boundaries', () => {
     const { red, black } = splitRedBlack(pixels([255, 0, 0], [255, 255, 255]), 0);
     expect([red[0], red[1]]).toEqual([255, 255]);
     expect([black[0], black[1]]).toEqual([0, 0]);
+  });
+});
+
+describe('compositing shortcuts', () => {
+  /**
+   * `compositeOnWhite` takes a shortcut for a fully opaque and a fully clear
+   * pixel. Both are optimisations rather than special cases — Pillow's
+   * MULDIV255 is an exact rounded divide by 255, so the general blend already
+   * computes the same bytes — and that is what lets the shortcuts be skipped
+   * without changing a single output byte. This pins the claim, so the two
+   * branches cannot drift apart from the arm they are meant to shadow.
+   */
+  function blendOntoWhite(r: number, g: number, b: number, alpha: number): [number, number, number] {
+    const mulDiv255 = (a: number, x: number): number => {
+      const t = a * x + 128;
+      return ((t >> 8) + t) >> 8;
+    };
+    const inv = 255 - alpha;
+    return [
+      mulDiv255(255, inv) + mulDiv255(r, alpha),
+      mulDiv255(255, inv) + mulDiv255(g, alpha),
+      mulDiv255(255, inv) + mulDiv255(b, alpha),
+    ];
+  }
+
+  it('takes the same shortcut the general blend would compute', () => {
+    for (const alpha of [0, 255]) {
+      for (const [r, g, b] of [
+        [0, 0, 0],
+        [255, 255, 255],
+        [1, 128, 254],
+        [200, 37, 91],
+      ] as Array<[number, number, number]>) {
+        const image: RawImage = {
+          width: 1,
+          height: 1,
+          data: Uint8Array.from([r, g, b, alpha]),
+        };
+        expect(
+          Array.from(compositeOnWhite(image)),
+          `rgba(${r}, ${g}, ${b}, ${alpha})`,
+        ).toEqual(blendOntoWhite(r, g, b, alpha));
+      }
+    }
+  });
+
+  it('agrees with the blend across the whole alpha range', () => {
+    for (let alpha = 0; alpha <= 255; alpha++) {
+      const image: RawImage = { width: 1, height: 1, data: Uint8Array.from([200, 37, 91, alpha]) };
+      expect(Array.from(compositeOnWhite(image)), `alpha ${alpha}`).toEqual(
+        blendOntoWhite(200, 37, 91, alpha),
+      );
+    }
   });
 });
