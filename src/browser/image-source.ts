@@ -70,6 +70,11 @@ async function drawToRawImage(
 ): Promise<RawImage> {
   let outWidth = width;
   let outHeight = height;
+  // Stryker disable next-line ConditionalExpression: two of the three tests
+  // here are shortcuts. Without the `!== undefined` check the comparison
+  // `undefined > 0` is false anyway, and a target width equal to the source's
+  // draws onto a canvas of the same size, which is the same picture. Only the
+  // `> 0` check changes anything: a target of 0 would build an empty canvas.
   if (targetWidth !== undefined && targetWidth > 0 && targetWidth !== width) {
     outWidth = targetWidth;
     outHeight = Math.max(1, Math.round((targetWidth / width) * height));

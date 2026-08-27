@@ -16,6 +16,7 @@ import type { RawImage } from '../src/image/raw-image.js';
 import type { PrintSource } from '../src/printer.js';
 import {
   FakeCanvasBase,
+  FakeHTMLCanvasElement,
   FakeHTMLImageElement,
   FakeImageData,
   FakeOffscreenCanvas,
@@ -108,6 +109,52 @@ describe('canvas sources', () => {
 
     const converted = await toRawImage(canvas as unknown as OffscreenCanvas);
     expect(Array.from(converted.data.subarray(0, 3))).toEqual([255, 255, 255]);
+  });
+
+  it('asks the canvas for its best resampling before drawing', async () => {
+    // The fake context samples nearest-neighbour whatever it is told, so this
+    // is the one part of the draw that pixels cannot check. It matters: the
+    // README's fidelity note rests on the browser applying a high quality
+    // filter here, since the Python implementation uses Lanczos.
+    const world = installFakeCanvas();
+    const canvas = new FakeOffscreenCanvas(4, 2);
+    await toRawImage(canvas as unknown as OffscreenCanvas, { targetWidth: 8 });
+
+    // The destination canvas is the resized one; the source gets a context of
+    // its own when the fake samples it.
+    const drawn = world.contexts.find((context) => context.canvas.width === 8);
+    expect(drawn).toBeDefined();
+    expect(drawn?.imageSmoothingEnabled).toBe(true);
+    expect(drawn?.imageSmoothingQuality).toBe('high');
+  });
+
+  it('reads an HTMLCanvasElement source, not only an OffscreenCanvas', async () => {
+    // Both arms of the canvas test have to work: a page that hands over a
+    // <canvas> is the common case, and OffscreenCanvas being available says
+    // nothing about which type the caller actually passed.
+    installFakeCanvas({ offscreen: false });
+    const canvas = new FakeHTMLCanvasElement();
+    canvas.width = 2;
+    canvas.height = 1;
+    const context = canvas.getContext('2d');
+    if (!context) throw new Error('fake context missing');
+    context.fillStyle = '#ffffff';
+    context.fillRect(0, 0, 2, 1);
+
+    const converted = await toRawImage(canvas as unknown as HTMLCanvasElement);
+    expect([converted.width, converted.height]).toEqual([2, 1]);
+    expect(Array.from(converted.data.subarray(0, 4))).toEqual([255, 255, 255, 255]);
+  });
+
+  it('handles a canvas in an environment without Blob', async () => {
+    // The Blob test is guarded by a typeof check because not every embedder
+    // has one; without the guard, `instanceof undefined` throws for every
+    // source that reaches it.
+    installFakeCanvas();
+    vi.stubGlobal('Blob', undefined);
+    const canvas = new FakeOffscreenCanvas(2, 1);
+    const converted = await toRawImage(canvas as unknown as OffscreenCanvas);
+    expect([converted.width, converted.height]).toEqual([2, 1]);
   });
 
   it('falls back to document.createElement where OffscreenCanvas is missing', async () => {
@@ -219,6 +266,38 @@ describe('HTMLImageElement sources', () => {
 });
 
 describe('through the printer', () => {
+  it('normalises to the doubled width when printing at 600 dpi', async () => {
+    // A 600 dpi job supplies the image at 600x600 and the pipeline halves it
+    // horizontally, so the width to resample to is twice the label's.
+    installFakeCanvas();
+    const { BrotherQLPrinter: Printer } = await import('../src/printer.js');
+    const { enableBrowserImages } = await import('../src/browser/image-source.js');
+    const { MockUsbDevice } = await import('./util/mock-usb.js');
+
+    const printer = new Printer(new MockUsbDevice(), { model: 'QL-820NWB' });
+    enableBrowserImages(printer);
+    await printer.open();
+
+    const widths: Array<number | undefined> = [];
+    const canvas = new FakeOffscreenCanvas(100, 8);
+    printer.setImageNormalizer(async (source, options) => {
+      widths.push(options.targetWidth);
+      const { toRawImage } = await import('../src/browser/image-source.js');
+      return toRawImage(source, options);
+    });
+
+    await expect(
+      printer.print(canvas as unknown as OffscreenCanvas, {
+        label: '62',
+        dpi600: true,
+        nonBlocking: true,
+      }),
+    ).resolves.toBeDefined();
+    expect(widths).toEqual([1392]);
+
+    await printer.close();
+  });
+
   it('normalises a canvas to the label width during print', async () => {
     installFakeCanvas();
     const { BrotherQLPrinter: Printer } = await import('../src/printer.js');
