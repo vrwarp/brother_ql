@@ -68,6 +68,40 @@ describe('per-platform claim advice', () => {
 });
 
 describe('diagnostics clock fallback', () => {
+  /**
+   * The recorder times events with `performance.now` where it exists, because
+   * it is monotonic — `Date.now` steps backwards when the system clock is
+   * corrected, which in a trace reads as a transfer that finished before it
+   * started. The fallback is for embedders that expose neither.
+   */
+  it('uses performance.now when the embedder has one', () => {
+    const performanceNow = vi.spyOn(performance, 'now').mockReturnValue(4242);
+    const dateNow = vi.spyOn(Date, 'now').mockReturnValue(999);
+    try {
+      const recorder = new DiagnosticsRecorder();
+      recorder.event('a', 'tick');
+      expect(recorder.events()[0]?.t).toBe(4242);
+      expect(performanceNow).toHaveBeenCalled();
+      expect(dateNow).not.toHaveBeenCalled();
+    } finally {
+      performanceNow.mockRestore();
+      dateNow.mockRestore();
+    }
+  });
+
+  it('falls back to Date.now where performance has no clock', () => {
+    // Some embedders expose a `performance` object without `now` on it.
+    vi.stubGlobal('performance', {});
+    const dateNow = vi.spyOn(Date, 'now').mockReturnValue(777);
+    try {
+      const recorder = new DiagnosticsRecorder();
+      recorder.event('a', 'tick');
+      expect(recorder.events()[0]?.t).toBe(777);
+    } finally {
+      dateNow.mockRestore();
+    }
+  });
+
   it('falls back to Date.now where performance is missing', () => {
     vi.stubGlobal('performance', undefined);
     const dateNow = vi.spyOn(Date, 'now').mockReturnValue(12345);
@@ -77,6 +111,20 @@ describe('diagnostics clock fallback', () => {
       expect(recorder.events()[0]?.t).toBe(12345);
     } finally {
       dateNow.mockRestore();
+    }
+  });
+
+  it('resolves the clock once, at construction', () => {
+    // The tracer is handed to hot paths, so the choice must not be re-made per
+    // event; a recorder built while `performance` existed keeps using it.
+    const performanceNow = vi.spyOn(performance, 'now').mockReturnValue(11);
+    try {
+      const recorder = new DiagnosticsRecorder();
+      vi.stubGlobal('performance', undefined);
+      recorder.event('a', 'tick');
+      expect(recorder.events()[0]?.t).toBe(11);
+    } finally {
+      performanceNow.mockRestore();
     }
   });
 });

@@ -65,11 +65,17 @@ export interface DiagnosticsRecorderOptions {
 
 function defaultNow(): () => number {
   // `performance.now` is monotonic and exists in every browser and in Node;
-  // `Date.now` is the fallback for exotic embedders.
+  // `Date.now` is the fallback for exotic embedders. (Monotonic matters here:
+  // `Date.now` steps backwards when the system clock is corrected, which in a
+  // trace reads as a transfer that finished before it started.)
+  //
+  // The chosen clock is captured, not re-read per call. A tracer is handed to
+  // hot paths, and a closure that dereferenced the global on every event would
+  // both cost more and break if the embedder replaced it mid-run.
   if (typeof performance !== 'undefined' && typeof performance.now === 'function') {
-    return () => performance.now();
+    return performance.now.bind(performance);
   }
-  return () => Date.now();
+  return Date.now;
 }
 
 /** Render one event as a single log line. */
@@ -78,7 +84,10 @@ export function formatTraceEvent(event: TraceEvent, baseTime = 0): string {
   let line = `+${at}ms ${event.category} ${event.name}`;
   if (event.data) {
     for (const [key, value] of Object.entries(event.data)) {
-      line += ` ${key}=${typeof value === 'object' && value !== null ? JSON.stringify(value) : String(value)}`;
+      // `null` needs no special case: JSON.stringify and String both render
+      // it as "null", so testing for it would only add a branch nothing can
+      // tell apart.
+      line += ` ${key}=${typeof value === 'object' ? JSON.stringify(value) : String(value)}`;
     }
   }
   return line;
@@ -107,6 +116,10 @@ export class DiagnosticsRecorder implements Tracer {
     this.#capacity = Number.isFinite(capacity) ? Math.max(1, Math.floor(capacity)) : 512;
     this.#sink = options.sink;
     this.#now = options.now ?? defaultNow();
+    // Stryker disable next-line ArrayDeclaration: pre-sizing is an allocation
+    // optimisation. The ring arithmetic is all modulo `#capacity` and never
+    // consults the array's own length, so an array that grows into the same
+    // shape behaves identically.
     this.#buffer = new Array<TraceEvent | undefined>(this.#capacity);
   }
 
@@ -156,6 +169,10 @@ export class DiagnosticsRecorder implements Tracer {
 
   /** Forget everything recorded so far. The sequence numbers keep counting. */
   clear(): void {
+    // Stryker disable next-line CallExpression: dropping this changes no
+    // observable state — `#count` is what `events()` reads — but it would keep
+    // every cleared event's payload alive for as long as the recorder is,
+    // which is the opposite of what clearing is for.
     this.#buffer.fill(undefined);
     this.#next = 0;
     this.#count = 0;

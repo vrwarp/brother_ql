@@ -93,6 +93,17 @@ describe('parseStatus', () => {
     expect(() => parseStatus(new Uint8Array(10))).toThrow(/Insufficient status data/);
   });
 
+  it('checks all three header bytes, not just the first', () => {
+    // A response that is out of frame by one byte still starts with two of the
+    // three; catching only the first would let the transport hand a shifted
+    // packet to the parser and report whatever landed in the media fields.
+    for (const index of [0, 1, 2]) {
+      const packet = makeStatusPacket({});
+      packet[index] = 0x00;
+      expect(() => parseStatus(packet), `byte ${index}`).toThrow(MalformedStatusError);
+    }
+  });
+
   it('rejects a packet with the wrong header', () => {
     const packet = makeStatusPacket();
     packet[0] = 0x00;
@@ -148,6 +159,28 @@ describe('suggestLabels', () => {
 
   it('returns nothing when no media is loaded', () => {
     const status = parseStatus(makeStatusPacket({ mediaTypeCode: 0x00, mediaWidthMm: 0 }));
+    expect(suggestLabels(status)).toEqual([]);
+  });
+
+  it('suggests nothing for a media type it does not recognise', () => {
+    // An unknown type code is not a licence to guess: the width and length
+    // still look exactly like 62x29 die-cut media, and offering that label for
+    // a roll the printer could not identify would print onto the wrong stock.
+    const status = parseStatus(
+      makeStatusPacket({ mediaTypeCode: 0x77, mediaWidthMm: 62, mediaLengthMm: 29 }),
+    );
+    expect(status.mediaType).toBe('unknown');
+    expect(suggestLabels(status)).toEqual([]);
+  });
+
+  it('does not offer endless labels for die-cut media of no length', () => {
+    // Every die-cut label has a length, so a die-cut reading of zero matches
+    // none of them. The endless labels do have a zero length, and must not be
+    // matched on that coincidence.
+    const status = parseStatus(
+      makeStatusPacket({ mediaTypeCode: 0x0b, mediaWidthMm: 62, mediaLengthMm: 0 }),
+    );
+    expect(status.mediaType).toBe('die-cut');
     expect(suggestLabels(status)).toEqual([]);
   });
 
