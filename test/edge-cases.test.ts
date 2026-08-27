@@ -22,7 +22,7 @@ import {
   labelName,
   labelsForModel,
 } from '../src/labels.js';
-import { getModel, modelIdentifiers, resolveModel } from '../src/models.js';
+import { getModel, modelIdentifiers, resolveModel, type Model } from '../src/models.js';
 import { BrotherQLPrinter } from '../src/printer.js';
 import { BrotherQLRaster } from '../src/raster.js';
 import { AsyncQueue, QueueTimeoutError } from '../src/usb/async-queue.js';
@@ -567,9 +567,23 @@ describe('lookup helpers', () => {
   });
 
   it('accounts for the model offset when checking fit', () => {
-    // 103 needs 1200 dots plus 12 of label offset and 44 of model offset,
-    // which exactly fits the 1296 dot head.
+    // 103 needs 1200 dots plus 12 of label offset and 44 of model offset:
+    // 1256 into the 1296 dot head, with 40 dots to spare.
     expect(labelFitsModel(getLabel('103'), getModel('QL-1100'))).toBe(true);
+  });
+
+  it('spends the model offset rather than gaining from it', () => {
+    // No shipping model has an offset large enough to decide a fit — the
+    // widest pairing leaves 40 dots spare — so the shipped table cannot say
+    // whether the offset is added to the requirement or subtracted from it.
+    // A model sized to the boundary can: 62 mm media needs 696 dots plus 12
+    // of label offset, so on a 720 dot head exactly 12 dots of model offset
+    // are left.
+    const head = (bytesPerRow: number, additionalOffsetR: number): Model =>
+      ({ ...getModel('QL-700'), numberBytesPerRow: bytesPerRow, additionalOffsetR }) as Model;
+
+    expect(labelFitsModel(getLabel('62'), head(90, 12))).toBe(true);
+    expect(labelFitsModel(getLabel('62'), head(90, 13))).toBe(false);
   });
 
   it('refuses to convert a label that does not fit, with a clear message', () => {
