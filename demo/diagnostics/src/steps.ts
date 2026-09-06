@@ -14,7 +14,9 @@
  */
 
 import {
+  BrotherQLError,
   DeviceDisconnectedError,
+  LabelColor,
   PrinterStatusError,
   VERSION,
   createJob,
@@ -34,12 +36,22 @@ import {
 
 import { collectEnvironment, snapshotDescriptors } from './collect.js';
 import type { Harness } from './harness.js';
-import type { ObservationField, StepContext, StepDefinition } from './runner.js';
+import {
+  attachStepData,
+  type ObservationField,
+  type StepContext,
+  type StepDefinition,
+} from './runner.js';
 import { bytesToBase64, bytesToHex } from './session.js';
 import { paintTestCard } from './testcard.js';
 import { assessMediaStatus, describeReportedMedia, sameMediaReported } from './verify.js';
 
-const APP_VERSION = '1';
+/**
+ * Bumped whenever the wizard changes what it records, so two bundles can be
+ * told apart. 2 adds the post-fault responsiveness probe and splits "did it
+ * recover" from "what did it take".
+ */
+const APP_VERSION = '2';
 
 /** A parsed status, flattened for storage. */
 interface StatusSummary {
@@ -99,6 +111,12 @@ interface PrintCapture {
   usbSeqStart: number;
   /** Set when the failure was the outcome the step was inducing. */
   expectedError?: { code?: string; message: string; statuses: StatusSummary[] };
+  /**
+   * Set when the step failed in a way it was not inducing. The job bytes above
+   * are still exactly what went to the printer, which is the point of keeping
+   * the capture at all on this path.
+   */
+  unexpectedError?: { code?: string; message: string; statuses: StatusSummary[] };
   /** How the pre-print verification went: status seen, corrections applied. */
   verification?: MediaVerification;
 }
@@ -179,6 +197,18 @@ async function verifyBeforePrint(
 
     if (assessment.kind === 'ok') {
       ctx.log(`Media check: printer reports ${reported}, matching '${label.identifier}'.`);
+      if (label.color === LabelColor.BlackRedWhite) {
+        // "Matching" is weaker here than it sounds, and saying so is the whole
+        // value: the status packet reports width and form factor, not whether
+        // the tape carries a red layer, so plain tape of the same width passes
+        // this check. The printer is the only thing that knows, and it only
+        // says so by refusing the job once printing has started.
+        ctx.log(
+          `Note: '${label.identifier}' is two-colour tape, and the status packet cannot ` +
+            'tell it from plain tape of the same width. This check cannot confirm the ' +
+            'right roll is loaded; a mismatch surfaces as a printer error mid-print.',
+        );
+      }
       break;
     }
     if (assessment.kind === 'unverifiable') {
@@ -385,7 +415,50 @@ async function runPrint(
       ctx.log(`Captured the induced failure: ${error.message}`);
       return capture;
     }
-    throw error;
+    // Not the failure this step was inducing, which makes it the interesting
+    // one. The job bytes are already in `capture`; sending them out with the
+    // error is what gets `jobs/<id>.bin` written for a step that failed.
+    capture.unexpectedError = {
+      ...(error instanceof BrotherQLError ? { code: error.code } : {}),
+      message: error instanceof Error ? error.message : String(error),
+      statuses: error instanceof PrinterStatusError ? [summarizeStatus(error.status)] : [],
+    };
+    ctx.log(`Unexpected failure; keeping the ${capture.jobBytes} job bytes for the bundle.`);
+    throw attachStepData(error, capture);
+  }
+}
+
+/**
+ * Ask the printer for its status straight after a job failed, and record
+ * whether it answered at all.
+ *
+ * This is the one measurement the cover-open step exists to take. A job
+ * abandoned part-way used to leave the printer waiting for raster rows that
+ * were never coming, and a printer in that state reads a status request as
+ * more pixel data instead of answering it — so it went quiet, and stayed quiet
+ * through cable replugs and reconnects, because none of those touch what it is
+ * waiting for. If the abandoned job was cancelled properly the printer is
+ * listening again immediately, before the cover has even been closed.
+ *
+ * A silent printer is a finding, not a failure: it is recorded and the step
+ * carries on to the recovery print either way.
+ */
+async function probeStillAnswers(
+  harness: Harness,
+  ctx: StepContext,
+): Promise<{ answered: boolean; status?: StatusSummary; error?: string }> {
+  try {
+    const printer = await harness.ensureConnected();
+    const status = await printer.queryStatus();
+    ctx.log('The printer still answers after the failed job — it was not left mid-job.');
+    return { answered: true, status: summarizeStatus(status) };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    ctx.log(
+      `The printer did not answer after the failed job (${message}). That is the ` +
+        'symptom of a job left half-received: note below what it took to bring it back.',
+    );
+    return { answered: false, error: message };
   }
 }
 
@@ -858,16 +931,41 @@ export function buildSteps(harness: Harness): StepDefinition[] {
         {
           id: 'recovered',
           label: 'Did the recovery label print correctly?',
-          choices: ['Yes', 'No', 'Only after power-cycling the printer'],
+          choices: ['Yes', 'No'],
+        },
+        {
+          // Split from the question above on purpose. "It recovered" and "here
+          // is what it took" are different facts, and running them together is
+          // what made an earlier bundle unreadable: the printer had come back,
+          // but nothing recorded whether that was the cover, a button, the
+          // cable, or simply waiting.
+          id: 'intervention',
+          label: 'Did the printer need anything beyond closing the cover?',
+          choices: [
+            'Nothing — closing the cover was enough',
+            'A button press on the printer',
+            'Unplugging and replugging the USB cable',
+            'A power cycle',
+            'Nothing I did — it came back on its own after a while',
+          ],
+        },
+        {
+          id: 'partialLabel',
+          label: 'Did a partial or blank label come out at any point?',
+          choices: ['No', 'Yes — a part-printed label', 'Yes — blank tape'],
         },
       ],
       instructions: `
-        <p>Captures what this printer says when it cannot print, and whether
-        it recovers without replugging.</p>
+        <p>Captures what this printer says when it cannot print, and whether it
+        is still listening afterwards.</p>
         <ol>
           <li>Open the printer's roll cover and leave it open.</li>
-          <li>Press <b>Run</b>. The page sends a job and expects an error.</li>
+          <li>Press <b>Run</b>. The page sends a job and expects an error, then
+              checks straight away whether the printer still answers.</li>
           <li>When told, close the cover; a recovery card is printed.</li>
+          <li>If it does not come back by itself, note exactly what you did to
+              revive it — the questions at the end ask, and which action worked
+              is the most useful thing this step can learn.</li>
         </ol>`,
       async run(ctx) {
         const model = harness.declaredModel() as Model;
@@ -875,10 +973,13 @@ export function buildSteps(harness: Harness): StepDefinition[] {
         await ctx.waitForUser('The cover is open');
         ctx.log('Sending a job at the open printer…');
         const fault = await runPrint(harness, ctx, label, { cut: true }, 1, true);
+        // Before anything is touched, and before the cover is closed: is the
+        // printer still listening? See probeStillAnswers.
+        const afterFault = await probeStillAnswers(harness, ctx);
         await ctx.waitForUser('I closed the cover (and reseated the roll if needed)');
         ctx.log('Printing the recovery card…');
         const recovery = await runPrint(harness, ctx, label, { cut: true }, 1, false);
-        return { fault, recovery };
+        return { fault, afterFault, recovery };
       },
     },
     {

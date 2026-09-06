@@ -92,6 +92,57 @@ Changes to the Python package are not tracked here.
 
 ### Fixed
 
+- The reader asked the IN endpoint for more the instant a transfer came back
+  empty, which is a busy-wait on any platform that completes a bulk IN
+  immediately when the printer has nothing to say. A QL-810W on Chrome for
+  Android answered that way throughout a session: 1.27 million empty reads in
+  twelve minutes, about 1,800 a second, sustained on a phone's battery. The
+  reader now pauses between empty reads, doubling to a 10 ms ceiling and
+  resetting the moment one carries data, so a printer that is talking is never
+  held up. `idleReadDelayMs` tunes the ceiling; `0` reads continuously as
+  before. (Found in a QL-810W diagnostic bundle.)
+- A printer that set the error status type while leaving both error information
+  bytes clear produced `The printer reported an error.` and nothing else — no
+  flag to name, no evidence kept. A QL-810W refused a black/red job exactly
+  that way, leaving its only clue in a trailing status byte nothing decodes.
+  `PrinterStatusError` now names the usual cause (a job the loaded media cannot
+  accept, most often a two-colour job on a roll that is not black/red) and
+  quotes the whole packet, an error message being the part of a failure that
+  reliably survives into a log. (Found in a QL-810W diagnostic bundle.)
+- A status query that went unanswered reported that a job "may or may not have
+  completed" after printing zero pages, describing a job that was never sent.
+  `StatusTimeoutError` now carries a `phase`, and an unanswered query says no
+  job was in progress and says what actually causes the silence. (Found in a
+  QL-810W diagnostic bundle.)
+- A job abandoned part-way left the printer waiting for the rest of it. Stopping
+  a write the moment the printer reports a fault is the point of the
+  between-chunks check — but `ESC i z` has already told the printer how many
+  raster rows to expect, and while it waits for them it reads everything that
+  arrives as pixel data, so it answers nothing and looks dead. A QL-810W bundle
+  caught the whole sequence: a cover-open fault stopped a job after one 16 KiB
+  chunk of 28 KiB, leaving the printer owed 11,960 bytes and holding 171 of the
+  300 rows it had been promised, which it later printed as a half label. Every
+  recovery attempt afterwards sent a 3 byte status request, which it ate as
+  three more bytes of raster. Two physical cable replugs and three
+  close-and-reopen cycles changed nothing, because a USB reset does not touch
+  the printer's receive state; it freed itself about ninety seconds later. An
+  abandoned job is now cancelled explicitly — a run of nulls longer than any
+  raster row, which resynchronises the printer from wherever in the stream the
+  write stopped, then `ESC @`. (Found in a QL-810W diagnostic bundle.)
+- The diagnostics bundle wrote every empty read as its own JSON object, so a
+  twelve-minute session produced a 267 MB `trace.usb.json` that was 99.99% the
+  same repeated entry — too large to attach to an issue and, buffered in memory
+  first, too large for the phone that produced it. Runs of empty reads now fold
+  into one record carrying a count and the run's total duration: that session
+  becomes 298 entries and 69 KB, with every read still counted in the
+  manifest's new `emptyReads` total.
+- A diagnostics print step that failed for a reason it was not inducing threw
+  away the job bytes it had already sent — so the one step in a bundle that
+  failed for an interesting protocol reason was the only print step with no
+  `jobs/*.bin` to replay. Salvaged data now leaves with the error.
+- The diagnostics media check called a two-colour label "matching" when the
+  printer reported plain tape of the same width, which it cannot tell apart.
+  It now says so, so a refused red job is not a surprise.
 - `ByteWriter.fill()` did not grow the buffer before filling it. `Uint8Array.fill`
   clamps to the array's bounds, so an overrunning fill wrote fewer bytes than the
   length then claimed and `toUint8Array()` padded the difference with zeros. Only

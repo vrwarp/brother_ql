@@ -189,6 +189,7 @@ export {
   UnknownModelError,
   UnsupportedCommandError,
   type PlatformHint,
+  type StatusTimeoutPhase,
 } from './errors.js';
 
 /**

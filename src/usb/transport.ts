@@ -64,9 +64,24 @@ export interface TransportOptions {
   chunkSize?: number;
   /** How long a single chunk may take before the connection is abandoned. */
   writeChunkTimeoutMs?: number;
+  /**
+   * Longest the reader pauses between bulk IN transfers that came back empty.
+   * Defaults to 10 ms. Zero reads continuously, which is what this did before
+   * the pause existed — see {@link UsbTransport.readLoopIdleDelayMs}.
+   */
+  idleReadDelayMs?: number;
   /** Receives trace events for debugging. See `diagnostics.ts`. */
   diagnostics?: Tracer;
 }
+
+/**
+ * Empty reads taken at full speed before the reader starts pausing.
+ *
+ * A real packet can be preceded by an empty transfer or two, and a printer
+ * that is mid-job answers within microseconds, so the first few empties are
+ * free. Only a sustained run of them means nobody is talking.
+ */
+const IDLE_READS_BEFORE_BACKOFF = 4;
 
 export type TransportEvents = {
   /** The device went away. */
@@ -123,6 +138,7 @@ export class UsbTransport extends TypedEventTarget<TransportEvents> {
 
   readonly #chunkSize: number;
   readonly #writeChunkTimeoutMs: number;
+  readonly #idleReadDelayMs: number;
   readonly #diag: Tracer | undefined;
 
   #state: TransportState = 'closed';
@@ -140,6 +156,7 @@ export class UsbTransport extends TypedEventTarget<TransportEvents> {
     this.device = device;
     this.#chunkSize = options.chunkSize ?? 16 * 1024;
     this.#writeChunkTimeoutMs = options.writeChunkTimeoutMs ?? 30_000;
+    this.#idleReadDelayMs = options.idleReadDelayMs ?? 10;
     this.#diag = options.diagnostics;
     // A degenerate chunk size would slice zero-length transfers and spin the
     // write loop; a non-finite timeout would fire the watchdog instantly (or
@@ -153,6 +170,19 @@ export class UsbTransport extends TypedEventTarget<TransportEvents> {
         `writeChunkTimeoutMs must be a positive number, got ${this.#writeChunkTimeoutMs}.`,
       );
     }
+    // Negative or non-finite would make the pause below either instant or
+    // eternal, and an eternal one silently stops the reader — the same class
+    // of programmer error as the two above, caught in the same place.
+    if (!Number.isFinite(this.#idleReadDelayMs) || this.#idleReadDelayMs < 0) {
+      throw new RangeError(
+        `idleReadDelayMs must be a non-negative number, got ${this.#idleReadDelayMs}.`,
+      );
+    }
+  }
+
+  /** Longest pause the reader takes between empty reads. See the option. */
+  get readLoopIdleDelayMs(): number {
+    return this.#idleReadDelayMs;
   }
 
   get opened(): boolean {
@@ -322,6 +352,8 @@ export class UsbTransport extends TypedEventTarget<TransportEvents> {
     // earlier and throws rather than continuing without them.
     if (!endpoint) return;
     const requestLength = Math.max(endpoint.packetSize || 0, STATUS_PACKET_LENGTH);
+    /** Consecutive transfers that came back with nothing. Drives the pause. */
+    let idleReads = 0;
 
     while (this.#state === 'open') {
       let result: USBInTransferResult;
@@ -346,11 +378,16 @@ export class UsbTransport extends TypedEventTarget<TransportEvents> {
         }
         continue;
       }
-      if (!result.data) continue;
-      // Stryker disable next-line ConditionalExpression: a transfer carrying
-      // an empty buffer is already a no-op below — the slice is empty, the
-      // partial buffer is unchanged — so skipping it early only saves work.
-      if (result.data.byteLength === 0) continue;
+      // Both shapes an empty completion takes: no buffer at all, and a buffer
+      // of length zero. Neither carries anything to reassemble, and a run of
+      // them is what #pauseAfterIdleRead exists to slow down — so this test is
+      // load-bearing now, not merely an optimisation.
+      if (!result.data || result.data.byteLength === 0) {
+        idleReads += 1;
+        await this.#pauseAfterIdleRead(idleReads);
+        continue;
+      }
+      idleReads = 0;
 
       const incoming = new Uint8Array(
         result.data.buffer,
@@ -392,6 +429,33 @@ export class UsbTransport extends TypedEventTarget<TransportEvents> {
       }
       this.#partial = buffer.slice(offset);
     }
+  }
+
+  /**
+   * Pause before re-issuing a read that came back with nothing.
+   *
+   * `transferIn` takes no timeout, so the reader's only way to wait for a
+   * packet is to have a transfer outstanding. Where the platform parks that
+   * transfer until data arrives, this loop costs nothing and never gets here.
+   * But some platforms complete a bulk IN immediately and empty when the
+   * printer has nothing to say, and then the loop is a busy-wait: a field
+   * capture from a QL-810W on Chrome for Android held 1.27 million empty reads
+   * in twelve minutes — about 1,800 a second, sustained, on a phone's battery,
+   * and 267 MB of them once the diagnostics proxy had written each one down.
+   *
+   * The pause doubles as the run of empty reads grows and resets the instant
+   * one carries data, so a printer that is talking is never held up, while a
+   * silent one is polled a hundred times a second rather than two thousand.
+   */
+  async #pauseAfterIdleRead(idleReads: number): Promise<void> {
+    if (this.#idleReadDelayMs <= 0) return;
+    const over = idleReads - IDLE_READS_BEFORE_BACKOFF;
+    if (over <= 0) return;
+    // 1, 2, 4, 8 ms and then the ceiling. The exponent is clamped before the
+    // shift, so an idle run of any length cannot push it to Infinity.
+    const backoff = 2 ** Math.min(over - 1, 20);
+    const delay = Math.min(this.#idleReadDelayMs, backoff);
+    await new Promise<void>((resolve) => setTimeout(resolve, delay));
   }
 
   /**

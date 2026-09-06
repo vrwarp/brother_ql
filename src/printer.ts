@@ -185,7 +185,7 @@ export class BrotherQLPrinter extends BrotherQLPrinterCore {
           pageCount,
         });
 
-      await this.transport.write(
+      await this.writeJob(
         instructions,
         (bytesSent, bytesTotal) =>
           onProgress?.({

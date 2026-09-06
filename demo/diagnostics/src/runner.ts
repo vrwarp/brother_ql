@@ -79,6 +79,30 @@ export class StepAbortedError extends Error {
   }
 }
 
+/**
+ * Carry partial results out of a failing step.
+ *
+ * A step reports success by returning and failure by throwing, which leaves
+ * nowhere to put work it finished before it failed. Hanging that on the error
+ * keeps the throw honest — the step really did fail — while letting
+ * {@link executeStep} record what was salvaged. The case this exists for is a
+ * print step: the job bytes it had already put on the wire are the most
+ * valuable thing in the bundle precisely when the printer refused them for a
+ * reason nobody anticipated.
+ */
+export function attachStepData<E>(error: E, data: unknown): E {
+  if (typeof error === 'object' && error !== null) {
+    (error as { stepData?: unknown }).stepData = data;
+  }
+  return error;
+}
+
+/** Partial data {@link attachStepData} left on a failure, if there is any. */
+export function stepDataFromError(error: unknown): unknown {
+  if (typeof error !== 'object' || error === null) return undefined;
+  return (error as { stepData?: unknown }).stepData;
+}
+
 export function toStepError(error: unknown): StepError {
   if (error instanceof BrotherQLError) {
     return { name: error.name, message: error.message, stack: error.stack, code: error.code };
@@ -174,11 +198,16 @@ export async function executeStep(
     });
   } catch (error) {
     const stepError = toStepError(error);
+    // Anything the step salvaged rides out on the error. Without this the one
+    // step that failed for an interesting reason is the one step whose bytes
+    // nobody can replay.
+    const salvaged = stepDataFromError(error);
     const record = session.updateStep(definition.id, {
       status: error instanceof StepAbortedError ? 'skipped' : 'failed',
       finishedAt: new Date().toISOString(),
       durationMs: Date.now() - started,
       error: stepError,
+      ...(salvaged !== undefined ? { data: salvaged } : {}),
     });
     if (record.status === 'failed' && hooks.recover) {
       try {

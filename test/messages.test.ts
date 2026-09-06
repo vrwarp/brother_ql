@@ -298,6 +298,18 @@ describe('transport and printer diagnostics', () => {
     expect(message).toMatch(/may or may not have completed/);
   });
 
+  it('tells a silent printer apart from a job of unknown fate', () => {
+    // No job is in flight when a plain status query times out, so a
+    // half-printed label that never existed is the wrong thing to describe.
+    // What helps is the reason a QL-810W actually went quiet: it was still
+    // waiting for the rest of a job that had been abandoned part-way.
+    const message = new StatusTimeoutError(0, 3000, 'query').message;
+    expect(message).toMatch(/No job was in progress/);
+    expect(message).toMatch(/abandoned part-way/);
+    // Replugging is the thing people try first, and it does not work.
+    expect(message).toMatch(/replugging the cable will not clear it/);
+  });
+
   it('says what the printer is busy with', () => {
     expect(new BusyError().message).toMatch(/busy with another operation/);
   });

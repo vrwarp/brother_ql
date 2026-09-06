@@ -11,7 +11,7 @@
 
 import { inflateRawSync } from 'node:zlib';
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { DiagnosticsRecorder } from '../src/diagnostics.js';
 import { BrotherQLPrinter } from '../src/printer.js';
@@ -24,11 +24,13 @@ import { buildBundleFiles } from '../demo/diagnostics/src/bundle.js';
 import { collectDeviceIdentity, snapshotDescriptors } from '../demo/diagnostics/src/collect.js';
 import { Harness } from '../demo/diagnostics/src/harness.js';
 import {
+  attachStepData,
   bundleReadiness,
   executeStep,
   observationsPending,
   refreshApplicability,
   StepAbortedError,
+  stepDataFromError,
   type StepDefinition,
 } from '../demo/diagnostics/src/runner.js';
 import {
@@ -344,6 +346,45 @@ describe('step runner resilience', () => {
     );
     expect(record.status).toBe('skipped');
   });
+
+  it('keeps what a failing step salvaged, and still writes its job bytes', async () => {
+    // A step reports failure by throwing, which leaves nowhere for work it
+    // finished first — so a print the printer refused for an unforeseen reason
+    // lost the bytes it had sent. That is precisely the job worth replaying: a
+    // QL-810W bundle failed exactly one print step for a protocol reason, and
+    // it was the only print step with no `jobs/*.bin` in the bundle.
+    const session = DiagnosticSession.create(memoryStorage(), { app: '1', library: 'x' });
+    const job = Uint8Array.from([0x1b, 0x69, 0x53, 0x0a]);
+    const refused = step({
+      id: 'print-red',
+      run: () =>
+        Promise.reject(
+          attachStepData(new Error('The printer reported an error.'), {
+            jobBase64: bytesToBase64(job),
+            jobBytes: job.length,
+          }),
+        ),
+    });
+
+    const record = await executeStep(refused, session, quietContext);
+
+    expect(record.status).toBe('failed');
+    expect(record.error?.message).toContain('reported an error');
+    expect((record.data as { jobBytes: number }).jobBytes).toBe(job.length);
+
+    const entry = buildBundleFiles(session, [], []).find(
+      (file) => file.name === 'jobs/print-red.bin',
+    );
+    expect(entry?.data).toEqual(job);
+  });
+
+  it('leaves a plain failure alone, carrying no data of its own', () => {
+    // Only steps that opt in get their partial work kept; everything else
+    // still fails with nothing attached.
+    expect(stepDataFromError(new Error('plain'))).toBeUndefined();
+    expect(stepDataFromError('not an object')).toBeUndefined();
+    expect(stepDataFromError(null)).toBeUndefined();
+  });
 });
 
 describe('verifying human claims against the printer', () => {
@@ -604,6 +645,55 @@ describe('recording USB proxy', () => {
     const claim = log.find((record) => record.op === 'claimInterface');
     expect(claim?.error?.message).toContain('usblp');
     expect(summarizeUsbLog(log).errors).toBe(1);
+  });
+
+  it('collapses a run of empty reads rather than writing one entry each', async () => {
+    // An idle printer answers a bulk IN with nothing and the reader asks
+    // again. One QL-810W session logged 1.27 million of those and the trace it
+    // produced was 267 MB, essentially all of it this. How hard the link was
+    // polled is the finding worth keeping; a million near-identical records
+    // are not, and on a phone they are a heap the page cannot afford.
+    const inner = new MockUsbDevice({ alwaysEmptyReads: true });
+    const log: Parameters<typeof summarizeUsbLog>[0][number][] = [];
+    const transport = new UsbTransport(new RecordingUsbDevice(inner, log), {
+      idleReadDelayMs: 0,
+    });
+
+    await transport.open();
+    await vi.waitFor(() => expect(inner.readLengths.length).toBeGreaterThan(50));
+    await transport.close();
+
+    const empties = log.filter(
+      (record) => record.op === 'transferIn' && !record.error && (record.length ?? 0) === 0,
+    );
+    // Folded into a handful of records...
+    expect(empties.length).toBeLessThan(10);
+    // ...that between them still account for every read that happened.
+    const counted = empties.reduce((total, record) => total + (record.repeated ?? 1), 0);
+    expect(counted).toBeGreaterThan(50);
+    expect(summarizeUsbLog(log).emptyReads).toBe(counted);
+    // Folding hands the dropped numbers back, so `seq` still means "position
+    // in this log" and a reader can cite one.
+    expect(log.map((record) => record.seq)).toEqual(log.map((_, index) => index));
+  });
+
+  it('keeps every read when told not to fold them', async () => {
+    const inner = new MockUsbDevice({ alwaysEmptyReads: true });
+    const log: Parameters<typeof summarizeUsbLog>[0][number][] = [];
+    const transport = new UsbTransport(
+      new RecordingUsbDevice(inner, log, undefined, { coalesceEmptyReads: false }),
+      { idleReadDelayMs: 0 },
+    );
+
+    await transport.open();
+    await vi.waitFor(() => expect(inner.readLengths.length).toBeGreaterThan(50));
+    await transport.close();
+
+    const empties = log.filter(
+      (record) => record.op === 'transferIn' && !record.error && (record.length ?? 0) === 0,
+    );
+    expect(empties.length).toBeGreaterThan(50);
+    for (const record of empties) expect(record.repeated).toBeUndefined();
   });
 });
 

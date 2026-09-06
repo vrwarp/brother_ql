@@ -588,15 +588,36 @@ Everything below is still open. Each row is a claim somebody has to make on
 hardware once, and a ticked box means it has been seen to work at least once —
 not that it is covered by a test, because none of it can be:
 
-- [x] Pairing, claiming and printing — QL-810W, 2026-08-02
+- [x] Pairing, claiming and printing — QL-810W, 2026-08-02 and again 2026-09-06
 - [ ] Editor Lite on → clear error; off → works
-- [ ] `queryStatus` reports the loaded media, and `suggestLabels` picks it
-- [ ] Continuous tape: threshold and dithered
+- [x] `queryStatus` reports the loaded media, and `suggestLabels` picks it —
+      QL-810W, 2026-09-06: 62 mm continuous, suggesting `62` and `62red`
+- [x] Continuous tape, thresholded — QL-810W, 2026-09-06: plain, PackBits
+      compressed and 600 dpi, all reported correct on paper, and the compressed
+      print indistinguishable from the plain one. Dithering is still unexercised
+      on hardware.
 - [ ] Die-cut: an exactly sized image, and a transposed one (auto-rotation)
-- [ ] Black/red on DK-22251 (QL-800 series)
-- [ ] Multiple copies, and per-page progress
-- [ ] Errors: wrong label loaded, cover opened mid-print, end of tape
-- [ ] Unplugging mid-job, then reconnecting without reloading the page
+- [ ] Black/red on DK-22251 (QL-800 series) — attempted on a QL-810W on
+      2026-09-06 and refused by the printer, which set the error status type
+      with no error flags and nothing printed. Whether the black/red roll was
+      really loaded could not be established afterwards, because the status
+      packet does not distinguish it from plain 62 mm tape. The most wanted row
+      here, and the one to bring a known-good DK-22251 roll to.
+- [x] Multiple copies, and per-page progress — QL-810W, 2026-09-06: a two-page
+      job confirmed page by page and cut between the two
+- [ ] Errors: wrong label loaded, cover opened mid-print, end of tape — the
+      cover-open case is half confirmed on a QL-810W (2026-09-06). The printer
+      reports the fault correctly and promptly. What followed was ours: the job
+      was abandoned part-way, as it should be, but the printer had been told to
+      expect 300 raster rows and had received 171, so it went on waiting for
+      the rest and read every later status request as more pixel data. Neither
+      replugging the cable nor reopening the device cleared it, and the printer
+      freed itself about ninety seconds later. An abandoned job is now
+      cancelled explicitly, which should make the recovery print work; that is
+      the part still to confirm on hardware. The other two are untested.
+- [x] Unplugging mid-job, then reconnecting without reloading the page —
+      QL-810W, 2026-09-06: detected in about a second, both idle and mid-print,
+      and reconnected silently with the printer needing nothing afterwards
 
 The last three are the ones worth going out of your way for: they are the paths
 where this library does its own thinking rather than replaying the reference

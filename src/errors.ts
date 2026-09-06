@@ -7,6 +7,7 @@
  * missing, which printer errors were reported, how far a job got).
  */
 
+import { hexFormat } from './internal/bytes.js';
 import type { PrinterStatus, PrinterErrorFlag } from './status.js';
 
 export abstract class BrotherQLError extends Error {
@@ -107,17 +108,39 @@ export class TransferTimeoutError extends BrotherQLError {
   }
 }
 
-/** The printer stopped reporting progress before the job finished. */
+/**
+ * Which wait ran out, which is what the message may honestly claim.
+ *
+ * A job that stops reporting leaves the printed outcome genuinely unknown. A
+ * status query that goes unanswered does not: nothing was in flight, so
+ * nothing was half-printed, and the useful thing to say is why a printer goes
+ * quiet. Reporting the second as the first sends people looking for a job that
+ * never existed — which is exactly what a bundle from a QL-810W showed after a
+ * cover-open fault, where the silence came from a job abandoned part-way that
+ * the printer was still waiting to receive the rest of.
+ */
+export type StatusTimeoutPhase = 'job' | 'query';
+
+/** The printer stopped reporting progress, or never answered at all. */
 export class StatusTimeoutError extends BrotherQLError {
   readonly code = 'status-timeout';
   readonly pagesPrinted: number;
+  /** Whether a job was on the wire, or the printer simply never replied. */
+  readonly phase: StatusTimeoutPhase;
 
-  constructor(pagesPrinted: number, idleMs: number) {
+  constructor(pagesPrinted: number, idleMs: number, phase: StatusTimeoutPhase = 'job') {
     super(
-      `The printer stopped responding for ${idleMs} ms after printing ${pagesPrinted} page(s). ` +
-        'The job may or may not have completed.',
+      phase === 'query'
+        ? `The printer stopped responding for ${idleMs} ms to a status request. ` +
+            'No job was in progress. The printer may be switched off, busy with earlier ' +
+            'work, or still waiting out a job that was abandoned part-way — and a printer ' +
+            'waiting for the rest of a job reads anything sent to it as more of that job, ' +
+            'so replugging the cable will not clear it.'
+        : `The printer stopped responding for ${idleMs} ms after printing ${pagesPrinted} page(s). ` +
+            'The job may or may not have completed.',
     );
     this.pagesPrinted = pagesPrinted;
+    this.phase = phase;
   }
 }
 
@@ -132,7 +155,19 @@ export class PrinterStatusError extends BrotherQLError {
     super(
       messages.length > 0
         ? `The printer reported an error: ${messages.join('; ')}.`
-        : 'The printer reported an error.',
+        : // A printer can set the error status type while leaving both error
+          // information bytes clear, and then the decoded list is empty and
+          // there is nothing to name. Saying only "an error" strands whoever
+          // reads it: a QL-810W refused a black/red job exactly this way, and
+          // the reason it gave lived in a byte nothing looked at. The packet
+          // is the evidence, and an error message is the only part of a
+          // failure that reliably survives into a log or a bug report, so it
+          // goes in the message rather than being left on the object.
+          'The printer reported an error but set no error flags, so it did not say ' +
+          'which fault it hit. The usual cause is a job the loaded media cannot ' +
+          'accept — most often a two-colour (red) job on a roll that is not the ' +
+          'black/red kind, which the printer only rejects once printing starts. ' +
+          `Status packet: ${hexFormat(status.raw)}.`,
     );
     this.status = status;
     this.errors = status.errors;
