@@ -41,6 +41,16 @@ export interface MockUsbDeviceOptions {
   interfaces?: MockInterface[];
   /** Replies served by successive `transferIn` calls. */
   readScript?: ReadScriptEntry[];
+  /**
+   * Once the script runs dry, complete every `transferIn` at once and empty
+   * rather than parking — what a QL-810W does on Chrome for Android whenever
+   * it has nothing to say, and what makes the reader loop a busy-wait.
+   *
+   * The completion is deferred by a timer rather than resolved synchronously:
+   * a promise that resolves in a microtask would let the reader starve the
+   * timer queue, and nothing scheduled with `setTimeout` would ever run.
+   */
+  alwaysEmptyReads?: boolean;
   /** Rejection thrown by `claimInterface`. */
   claimError?: Error;
   /** Rejection thrown by `open`. */
@@ -261,6 +271,10 @@ export class MockUsbDevice implements MinimalUsbDevice {
       const entry = this.#readScript.shift();
 
       if (!entry) {
+        if (this.#options.alwaysEmptyReads) {
+          await new Promise<void>((resolve) => setTimeout(resolve, 0));
+          return { status: 'ok', data: undefined } as unknown as USBInTransferResult;
+        }
         // Nothing scripted: wait for something to be pushed, or for a close.
         await this.#waitForRead();
         continue;

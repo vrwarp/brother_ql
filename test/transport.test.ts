@@ -308,3 +308,59 @@ describe('closing', () => {
     await transport.close();
   });
 });
+
+describe('pacing an idle read loop', () => {
+  it('stops hammering an endpoint that keeps completing empty', async () => {
+    // `transferIn` takes no timeout, so the reader's only way to wait is to
+    // have a transfer outstanding. Where the platform parks that transfer this
+    // costs nothing — but a QL-810W on Chrome for Android completes it at once
+    // and empty, and then the loop is a busy-wait: a field capture held 1.27
+    // million such reads in twelve minutes, about 1,800 a second.
+    //
+    // Both transports spin in the same event loop over the same window, so the
+    // comparison measures the pause and not how fast the machine is.
+    const paced = new MockUsbDevice({ alwaysEmptyReads: true });
+    const continuous = new MockUsbDevice({ alwaysEmptyReads: true });
+    const pacedTransport = new UsbTransport(paced);
+    const continuousTransport = new UsbTransport(continuous, { idleReadDelayMs: 0 });
+
+    await pacedTransport.open();
+    await continuousTransport.open();
+    await new Promise<void>((resolve) => setTimeout(resolve, 300));
+    await pacedTransport.close();
+    await continuousTransport.close();
+
+    expect(paced.readLengths.length).toBeGreaterThan(0);
+    expect(continuous.readLengths.length).toBeGreaterThan(paced.readLengths.length * 2);
+  });
+
+  it('still delivers a packet that arrives after a long silence', async () => {
+    // The pause must never cost a packet: what it delays is asking again, and
+    // a printer that starts talking has to be heard.
+    const device = new MockUsbDevice({ alwaysEmptyReads: true });
+    const transport = new UsbTransport(device);
+
+    await transport.open();
+    // Long enough that the pause has climbed to its ceiling.
+    await vi.waitFor(() => expect(device.readLengths.length).toBeGreaterThan(8));
+    device.pushRead(STATUS_REPLY);
+
+    await expect(transport.statusQueue.take({ timeoutMs: 2000 })).resolves.toHaveLength(32);
+    await transport.close();
+  });
+
+  it('rejects an idle pause that could never elapse', () => {
+    // Same class of programmer error as a zero chunk size: a negative or
+    // non-finite pause either does nothing or stops the reader for good.
+    expect(() => new UsbTransport(new MockUsbDevice(), { idleReadDelayMs: -1 })).toThrow(
+      RangeError,
+    );
+    expect(() => new UsbTransport(new MockUsbDevice(), { idleReadDelayMs: Number.NaN })).toThrow(
+      RangeError,
+    );
+    expect(new UsbTransport(new MockUsbDevice()).readLoopIdleDelayMs).toBe(10);
+    expect(
+      new UsbTransport(new MockUsbDevice(), { idleReadDelayMs: 0 }).readLoopIdleDelayMs,
+    ).toBe(0);
+  });
+});
