@@ -606,10 +606,15 @@ not that it is covered by a test, because none of it can be:
 - [x] Multiple copies, and per-page progress — QL-810W, 2026-09-06: a two-page
       job confirmed page by page and cut between the two
 - [ ] Errors: wrong label loaded, cover opened mid-print, end of tape — the
-      cover-open case is confirmed on a QL-810W (2026-09-06): the printer
-      reports it correctly, but then stops answering status queries altogether
-      and does not recover until it is power-cycled, so the recovery print in
-      the diagnostics wizard fails. The other two are untested.
+      cover-open case is half confirmed on a QL-810W (2026-09-06). The printer
+      reports the fault correctly and promptly. What followed was ours: the job
+      was abandoned part-way, as it should be, but the printer had been told to
+      expect 300 raster rows and had received 171, so it went on waiting for
+      the rest and read every later status request as more pixel data. Neither
+      replugging the cable nor reopening the device cleared it, and the printer
+      freed itself about ninety seconds later. An abandoned job is now
+      cancelled explicitly, which should make the recovery print work; that is
+      the part still to confirm on hardware. The other two are untested.
 - [x] Unplugging mid-job, then reconnecting without reloading the page —
       QL-810W, 2026-09-06: detected in about a second, both idle and mid-print,
       and reconnected silently with the printer needing nothing afterwards

@@ -112,9 +112,23 @@ Changes to the Python package are not tracked here.
 - A status query that went unanswered reported that a job "may or may not have
   completed" after printing zero pages, describing a job that was never sent.
   `StatusTimeoutError` now carries a `phase`, and an unanswered query says no
-  job was in progress and points at the printer. The case that produced it: a
-  QL-810W stopped answering entirely after a cover-open fault, and stayed
-  silent until it was power-cycled. (Found in a QL-810W diagnostic bundle.)
+  job was in progress and says what actually causes the silence. (Found in a
+  QL-810W diagnostic bundle.)
+- A job abandoned part-way left the printer waiting for the rest of it. Stopping
+  a write the moment the printer reports a fault is the point of the
+  between-chunks check — but `ESC i z` has already told the printer how many
+  raster rows to expect, and while it waits for them it reads everything that
+  arrives as pixel data, so it answers nothing and looks dead. A QL-810W bundle
+  caught the whole sequence: a cover-open fault stopped a job after one 16 KiB
+  chunk of 28 KiB, leaving the printer owed 11,960 bytes and holding 171 of the
+  300 rows it had been promised, which it later printed as a half label. Every
+  recovery attempt afterwards sent a 3 byte status request, which it ate as
+  three more bytes of raster. Two physical cable replugs and three
+  close-and-reopen cycles changed nothing, because a USB reset does not touch
+  the printer's receive state; it freed itself about ninety seconds later. An
+  abandoned job is now cancelled explicitly — a run of nulls longer than any
+  raster row, which resynchronises the printer from wherever in the stream the
+  write stopped, then `ESC @`. (Found in a QL-810W diagnostic bundle.)
 - The diagnostics bundle wrote every empty read as its own JSON object, so a
   twelve-minute session produced a 267 MB `trace.usb.json` that was 99.99% the
   same repeated entry — too large to attach to an issue and, buffered in memory

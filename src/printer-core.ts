@@ -111,6 +111,18 @@ export {
   type Tracer,
 } from './diagnostics.js';
 
+/**
+ * Null bytes in the cancel sequence.
+ *
+ * Two jobs at once: enough of them to run past whatever remains of a raster
+ * row the abandoned write stopped inside, and then at least one that the
+ * printer reads as the invalidate command. 400 is the largest
+ * `numInvalidateBytes` in the model table and is comfortably longer than the
+ * longest row any model can send (162 bytes plus framing, plus PackBits
+ * worst-case growth), so one constant is correct for every printer.
+ */
+const CANCEL_NULL_BYTES = 400;
+
 export interface PrintProgress {
   phase: 'converting' | 'sending' | 'printing';
   bytesSent: number;
@@ -443,6 +455,68 @@ export class BrotherQLPrinterCore extends TypedEventTarget<PrinterEvents> {
   }
 
   /**
+   * Take back a job the printer was promised but will never receive.
+   *
+   * {@link drainForErrors} exists to abandon a job the moment the printer says
+   * it cannot print it, rather than pushing every remaining byte at it. What
+   * that leaves behind is a printer mid-job: `ESC i z` told it how many raster
+   * rows to expect and it goes on waiting for the rest. While it waits it
+   * reads everything that arrives as pixel data, so a status request is
+   * swallowed instead of answered and the printer looks dead.
+   *
+   * A QL-810W bundle caught the whole sequence. A cover-open fault stopped a
+   * job after one 16 KiB chunk of 28 KiB, leaving the printer owed 11,960
+   * bytes. Every recovery attempt afterwards sent a 3 byte status request,
+   * which it ate as three more bytes of raster; two physical cable replugs and
+   * three close-and-reopen cycles changed nothing, because a USB reset does
+   * not touch the printer's receive state. It came back on its own a minute
+   * and a half later.
+   *
+   * The cure is the sequence every job already opens with, and it works from
+   * any point in the stream: the run of nulls outlasts the longest row, so
+   * however far into one the write stopped, the remainder is eaten as data and
+   * what follows lands as the invalidate command it is. `ESC @` then resets
+   * the printer. On a printer that is idle anyway both are no-ops.
+   */
+  protected async cancelAbandonedJob(): Promise<void> {
+    // A connection that is already gone took the job with it, and the write
+    // below could only fail.
+    if (!this.transport.opened) return;
+
+    const cancel = new Uint8Array(CANCEL_NULL_BYTES + 2);
+    cancel[CANCEL_NULL_BYTES] = 0x1b;
+    cancel[CANCEL_NULL_BYTES + 1] = 0x40;
+    try {
+      await this.transport.write(cancel);
+      this.diagnostics?.event('printer', 'job-cancelled', { bytes: cancel.length });
+    } catch (error) {
+      // Best effort. Whatever abandoned the job is the failure worth
+      // reporting, and it is already on its way up.
+      this.diagnostics?.event('printer', 'cancel-failed', { error: String(error) });
+    }
+  }
+
+  /**
+   * Write a job, and take it back from the printer if the write is abandoned.
+   *
+   * Shared by `sendRaw` here and `print` in the subclass so the two cannot
+   * drift: whatever stops a write part-way leaves the same mess behind, and
+   * the printer has to be told either way.
+   */
+  protected async writeJob(
+    instructions: Uint8Array,
+    onProgress: ((bytesSent: number, bytesTotal: number) => void) | undefined,
+    betweenChunks: () => void,
+  ): Promise<void> {
+    try {
+      await this.transport.write(instructions, onProgress, betweenChunks);
+    } catch (error) {
+      await this.cancelAbandonedJob();
+      throw error;
+    }
+  }
+
+  /**
    * Send an already-built job — one produced by `convert` (possibly in a
    * worker), by `createJob`, or captured from another tool.
    */
@@ -471,7 +545,7 @@ export class BrotherQLPrinterCore extends TypedEventTarget<PrinterEvents> {
       // first, and an early page confirmation is counted rather than lost.
       const progress = this.startJob(pageCount);
 
-      await this.transport.write(
+      await this.writeJob(
         instructions,
         (bytesSent, bytesTotal) =>
           options.onProgress?.({

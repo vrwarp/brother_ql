@@ -116,7 +116,8 @@ export class TransferTimeoutError extends BrotherQLError {
  * nothing was half-printed, and the useful thing to say is why a printer goes
  * quiet. Reporting the second as the first sends people looking for a job that
  * never existed — which is exactly what a bundle from a QL-810W showed after a
- * cover-open fault left the printer silent.
+ * cover-open fault, where the silence came from a job abandoned part-way that
+ * the printer was still waiting to receive the rest of.
  */
 export type StatusTimeoutPhase = 'job' | 'query';
 
@@ -131,9 +132,10 @@ export class StatusTimeoutError extends BrotherQLError {
     super(
       phase === 'query'
         ? `The printer stopped responding for ${idleMs} ms to a status request. ` +
-            'No job was in progress. The printer may be busy with earlier work, switched ' +
-            'off, or wedged by a fault it has not cleared — a cover-open error can leave ' +
-            'it silent until the cover is closed and the printer power-cycled.'
+            'No job was in progress. The printer may be switched off, busy with earlier ' +
+            'work, or still waiting out a job that was abandoned part-way — and a printer ' +
+            'waiting for the rest of a job reads anything sent to it as more of that job, ' +
+            'so replugging the cable will not clear it.'
         : `The printer stopped responding for ${idleMs} ms after printing ${pagesPrinted} page(s). ` +
             'The job may or may not have completed.',
     );

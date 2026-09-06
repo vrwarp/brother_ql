@@ -22,7 +22,12 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 import { DiagnosticsRecorder } from '../src/diagnostics.js';
-import { BusyError, PrinterStatusError, StatusTimeoutError } from '../src/errors.js';
+import {
+  BusyError,
+  DeviceDisconnectedError,
+  PrinterStatusError,
+  StatusTimeoutError,
+} from '../src/errors.js';
 import { BrotherQLPrinter } from '../src/printer.js';
 import { BrotherQLPrinterCore, type PrintProgress } from '../src/printer-core.js';
 import {
@@ -275,6 +280,61 @@ describe('BrotherQLPrinterCore', () => {
     await printer.open();
 
     await expect(printer.sendRaw(JOB)).rejects.toThrow(PrinterStatusError);
+
+    await printer.close();
+  });
+
+  it('takes back a job the printer will never be sent the rest of', async () => {
+    // Abandoning a write leaves the printer waiting for raster rows that are
+    // never coming, and while it waits it reads everything that arrives as
+    // pixel data. A QL-810W went silent exactly this way: two physical cable
+    // replugs and three close-and-reopen cycles left it mute, because none of
+    // them touch what the printer is still expecting. Only a valid command
+    // stream does, and the printer has to be walked back to reading commands
+    // before it can see one.
+    const device = new MockUsbDevice({
+      deferReadsUntilWrite: true,
+      readScript: [{ kind: 'data', bytes: STATUS_ERROR_COVER_OPEN }],
+    });
+    const diagnostics = new DiagnosticsRecorder();
+    const printer = new BrotherQLPrinterCore(device, {
+      model: 'QL-810W',
+      chunkSize: 512,
+      diagnostics,
+    });
+    await printer.open();
+
+    // Filled, so the cancel's run of nulls is not just more of the job.
+    const job = new Uint8Array(512 * 40).fill(0xff);
+    await expect(printer.sendRaw(job)).rejects.toBeInstanceOf(PrinterStatusError);
+
+    const written = device.writtenBytes();
+    // The rest of the job was still dropped rather than pushed at a printer
+    // that cannot print it.
+    expect(written.length).toBeLessThan(job.length);
+    // ...and what went out last is the reset: a run of nulls long enough to
+    // outlast any half-sent row, so the remainder is eaten as data and the
+    // rest lands as the invalidate command, then ESC @.
+    const tail = written.subarray(written.length - 402);
+    expect(tail.subarray(0, 400).every((byte) => byte === 0x00)).toBe(true);
+    expect(Array.from(tail.subarray(400))).toEqual([0x1b, 0x40]);
+    expect(diagnostics.format().join('\n')).toContain('job-cancelled');
+
+    await printer.close();
+  });
+
+  it('reports the failure that abandoned the job, not the cancel that followed', async () => {
+    // Taking the job back is best effort. When the write failed because the
+    // printer went away, the cancel fails too — and the disconnect is still
+    // the thing worth reporting.
+    const device = new MockUsbDevice({
+      writeError: new DOMException('The device was disconnected.', 'NetworkError'),
+    });
+    const printer = new BrotherQLPrinterCore(device, { model: 'QL-810W' });
+    await printer.open();
+
+    await expect(printer.sendRaw(JOB)).rejects.toBeInstanceOf(DeviceDisconnectedError);
+    expect(printer.busy).toBe(false);
 
     await printer.close();
   });
