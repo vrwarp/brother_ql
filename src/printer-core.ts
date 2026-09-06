@@ -38,6 +38,7 @@ import {
   PrinterStatusError,
   StatusTimeoutError,
   UnknownModelError,
+  type StatusTimeoutPhase,
 } from './errors.js';
 import type { Tracer } from './diagnostics.js';
 import { TypedEventTarget } from './internal/events.js';
@@ -100,6 +101,7 @@ export {
   TransferTimeoutError,
   UnknownModelError,
   type PlatformHint,
+  type StatusTimeoutPhase,
 } from './errors.js';
 export {
   DiagnosticsRecorder,
@@ -305,9 +307,11 @@ export class BrotherQLPrinterCore extends TypedEventTarget<PrinterEvents> {
         // zero or less, which rejects at once and is translated into the same
         // StatusTimeoutError. What enforces the deadline is `remaining` being
         // passed down as the wait's own budget.
-        if (remaining <= 0) throw new StatusTimeoutError(0, timeoutMs);
+        if (remaining <= 0) throw new StatusTimeoutError(0, timeoutMs, 'query');
 
-        const packet = await this.takePacket(remaining, 0, timeoutMs);
+        // 'query': nothing is on the wire here, so a timeout must not claim a
+        // job of unknown fate. See StatusTimeoutPhase.
+        const packet = await this.takePacket(remaining, 0, timeoutMs, 'query');
         const status = tryParseStatus(packet);
         if (!status) continue; // ignore anything unparseable and keep waiting
         this.emit('status', status);
@@ -331,12 +335,13 @@ export class BrotherQLPrinterCore extends TypedEventTarget<PrinterEvents> {
     timeoutMs: number,
     pagesPrinted: number,
     idleMs: number,
+    phase: StatusTimeoutPhase = 'job',
   ): Promise<Uint8Array> {
     try {
       return await this.transport.statusQueue.take({ timeoutMs });
     } catch (error) {
       if (error instanceof QueueTimeoutError) {
-        throw new StatusTimeoutError(pagesPrinted, idleMs);
+        throw new StatusTimeoutError(pagesPrinted, idleMs, phase);
       }
       throw error;
     }

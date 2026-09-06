@@ -186,6 +186,10 @@ describe('BrotherQLPrinterCore', () => {
 
     await expect(printer.queryStatus(60)).rejects.toThrow(StatusTimeoutError);
     await expect(printer.queryStatus(60)).rejects.toThrow(/stopped responding for 60 ms/);
+    // Nothing was on the wire, so the failure must not describe a job whose
+    // fate is unknown — there was no job. A QL-810W goes quiet like this after
+    // a cover-open fault, and the report has to send people to the printer.
+    await expect(printer.queryStatus(60)).rejects.toThrow(/No job was in progress/);
     // The lock is released even though the query failed.
     expect(printer.busy).toBe(false);
 

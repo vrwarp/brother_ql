@@ -24,6 +24,7 @@ import {
   UnknownModelError,
   UnsupportedCommandError,
 } from '../src/errors.js';
+import { hexFormat } from '../src/internal/bytes.js';
 import { parseStatus } from '../src/status.js';
 import { makeStatusPacket } from './util/mock-usb.js';
 
@@ -106,9 +107,53 @@ describe('error detail', () => {
     expect(error.message).toContain('Cover opened while printing');
   });
 
-  it('still reads sensibly when the printer reports an error with no bits set', () => {
+  it('quotes the packet when the printer reports an error with no bits set', () => {
+    // Both error information bytes clear and the error status type set means
+    // there is no flag to name, and "the printer reported an error" on its own
+    // strands whoever reads it. The packet is the only evidence there is, and
+    // a message is the part of a failure that survives into a log.
     const status = parseStatus(makeStatusPacket({ statusTypeCode: 0x02 }));
-    expect(new PrinterStatusError(status).message).toBe('The printer reported an error.');
+    const message = new PrinterStatusError(status).message;
+
+    expect(message).toContain('set no error flags');
+    expect(message).toContain(hexFormat(status.raw));
+  });
+
+  it('points a flagless error at the media, which is what usually causes one', () => {
+    // The exact reply a QL-810W gave to a black/red job: error status type set,
+    // both error information bytes clear, and the only trace of a reason in a
+    // trailing byte nothing decodes. Nothing in the library can say what 0x23
+    // means, so the message names the common cause and hands over the bytes.
+    const packet = Uint8Array.from([
+      0x80, 0x20, 0x42, 0x34, 0x39, 0x30, 0x04, 0x00, 0x00, 0x00, 0x3e, 0x0a, 0x00, 0x00, 0x15,
+      0x00, 0x00, 0x00, 0x02, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00,
+      0x00, 0x23,
+    ]);
+    const error = new PrinterStatusError(parseStatus(packet));
+
+    expect(error.errors).toHaveLength(0);
+    expect(error.message).toContain('two-colour');
+    // The byte that carried the reason has to reach the reader intact.
+    expect(error.message).toContain(hexFormat(packet));
+    expect(error.message).toMatch(/00 23\.$/);
+  });
+
+  it('does not invent a job when a status query goes unanswered', () => {
+    // Nothing was on the wire, so nothing was half-printed. Reporting this as
+    // a job of unknown fate sends people looking for a label that never was.
+    const error = new StatusTimeoutError(0, 3000, 'query');
+
+    expect(error.phase).toBe('query');
+    expect(error.message).toContain('stopped responding for 3000 ms');
+    expect(error.message).toContain('No job was in progress');
+    expect(error.message).not.toContain('may or may not have completed');
+  });
+
+  it('still leaves a stalled job as an unknown outcome', () => {
+    const error = new StatusTimeoutError(2, 10_000);
+
+    expect(error.phase).toBe('job');
+    expect(error.message).toContain('may or may not have completed');
   });
 
   it('keeps the packet that could not be parsed', () => {

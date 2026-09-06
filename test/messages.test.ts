@@ -298,6 +298,16 @@ describe('transport and printer diagnostics', () => {
     expect(message).toMatch(/may or may not have completed/);
   });
 
+  it('tells a silent printer apart from a job of unknown fate', () => {
+    // A cover-open fault can leave a QL-810W answering nothing at all, and no
+    // job is in flight when a plain status query times out. What helps is
+    // where to look, not a half-printed label that never existed.
+    const message = new StatusTimeoutError(0, 3000, 'query').message;
+    expect(message).toMatch(/No job was in progress/);
+    expect(message).toMatch(/cover-open error can leave it silent/);
+    expect(message).toMatch(/power-cycled/);
+  });
+
   it('says what the printer is busy with', () => {
     expect(new BusyError().message).toMatch(/busy with another operation/);
   });
