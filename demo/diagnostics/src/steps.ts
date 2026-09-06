@@ -14,7 +14,9 @@
  */
 
 import {
+  BrotherQLError,
   DeviceDisconnectedError,
+  LabelColor,
   PrinterStatusError,
   VERSION,
   createJob,
@@ -34,7 +36,12 @@ import {
 
 import { collectEnvironment, snapshotDescriptors } from './collect.js';
 import type { Harness } from './harness.js';
-import type { ObservationField, StepContext, StepDefinition } from './runner.js';
+import {
+  attachStepData,
+  type ObservationField,
+  type StepContext,
+  type StepDefinition,
+} from './runner.js';
 import { bytesToBase64, bytesToHex } from './session.js';
 import { paintTestCard } from './testcard.js';
 import { assessMediaStatus, describeReportedMedia, sameMediaReported } from './verify.js';
@@ -99,6 +106,12 @@ interface PrintCapture {
   usbSeqStart: number;
   /** Set when the failure was the outcome the step was inducing. */
   expectedError?: { code?: string; message: string; statuses: StatusSummary[] };
+  /**
+   * Set when the step failed in a way it was not inducing. The job bytes above
+   * are still exactly what went to the printer, which is the point of keeping
+   * the capture at all on this path.
+   */
+  unexpectedError?: { code?: string; message: string; statuses: StatusSummary[] };
   /** How the pre-print verification went: status seen, corrections applied. */
   verification?: MediaVerification;
 }
@@ -179,6 +192,18 @@ async function verifyBeforePrint(
 
     if (assessment.kind === 'ok') {
       ctx.log(`Media check: printer reports ${reported}, matching '${label.identifier}'.`);
+      if (label.color === LabelColor.BlackRedWhite) {
+        // "Matching" is weaker here than it sounds, and saying so is the whole
+        // value: the status packet reports width and form factor, not whether
+        // the tape carries a red layer, so plain tape of the same width passes
+        // this check. The printer is the only thing that knows, and it only
+        // says so by refusing the job once printing has started.
+        ctx.log(
+          `Note: '${label.identifier}' is two-colour tape, and the status packet cannot ` +
+            'tell it from plain tape of the same width. This check cannot confirm the ' +
+            'right roll is loaded; a mismatch surfaces as a printer error mid-print.',
+        );
+      }
       break;
     }
     if (assessment.kind === 'unverifiable') {
@@ -385,7 +410,16 @@ async function runPrint(
       ctx.log(`Captured the induced failure: ${error.message}`);
       return capture;
     }
-    throw error;
+    // Not the failure this step was inducing, which makes it the interesting
+    // one. The job bytes are already in `capture`; sending them out with the
+    // error is what gets `jobs/<id>.bin` written for a step that failed.
+    capture.unexpectedError = {
+      ...(error instanceof BrotherQLError ? { code: error.code } : {}),
+      message: error instanceof Error ? error.message : String(error),
+      statuses: error instanceof PrinterStatusError ? [summarizeStatus(error.status)] : [],
+    };
+    ctx.log(`Unexpected failure; keeping the ${capture.jobBytes} job bytes for the bundle.`);
+    throw attachStepData(error, capture);
   }
 }
 

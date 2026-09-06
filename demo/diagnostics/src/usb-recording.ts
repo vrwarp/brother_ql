@@ -42,6 +42,21 @@ export interface UsbLogRecord {
   /** transferIn payload as hex; transferOut first bytes as hex. */
   hex?: string;
   error?: { name: string; message: string };
+  /**
+   * How many identical empty reads this entry stands for. Present only on
+   * reads that returned nothing; `ms` is then the total across the run and `t`
+   * is when the run began. See {@link RecordingUsbDevice}.
+   */
+  repeated?: number;
+}
+
+export interface RecordingOptions {
+  /**
+   * Collapse consecutive empty reads into one entry. On by default; turn it
+   * off to keep every call, at the cost of a log that grows by roughly two
+   * thousand entries per second on a link that is merely idle.
+   */
+  coalesceEmptyReads?: boolean;
 }
 
 const OUT_PREVIEW_BYTES = 16;
@@ -50,12 +65,19 @@ export class RecordingUsbDevice implements MinimalUsbDevice {
   readonly inner: MinimalUsbDevice;
   readonly log: UsbLogRecord[];
   readonly #now: () => number;
+  readonly #coalesceEmptyReads: boolean;
   #seq = 0;
 
-  constructor(inner: MinimalUsbDevice, log: UsbLogRecord[], now?: () => number) {
+  constructor(
+    inner: MinimalUsbDevice,
+    log: UsbLogRecord[],
+    now?: () => number,
+    options: RecordingOptions = {},
+  ) {
     this.inner = inner;
     this.log = log;
     this.#now = now ?? (() => performance.now());
+    this.#coalesceEmptyReads = options.coalesceEmptyReads ?? true;
   }
 
   get vendorId(): number {
@@ -148,9 +170,53 @@ export class RecordingUsbDevice implements MinimalUsbDevice {
           record.hex = bytesToHex(
             new Uint8Array(result.data.buffer, result.data.byteOffset, result.data.byteLength),
           );
+          return;
         }
+        this.#foldEmptyRead(record);
       },
     );
+  }
+
+  /**
+   * Fold a read that returned nothing into the run before it.
+   *
+   * An idle printer answers a bulk IN with an empty transfer and the reader
+   * re-issues at once, so on some platforms these arrive by the hundred per
+   * second: one QL-810W session logged 1.27 million of them, and the raw trace
+   * it produced was 267 MB of which all but a few kilobytes was this. Keeping
+   * a count instead preserves what the run actually tells a reader — when the
+   * link went quiet, for how long, and how hard it was polled — at a size a
+   * phone can hold in memory and a maintainer can open.
+   *
+   * Only the tail is ever folded, since folding anything else would reorder
+   * the log. The reader owns the IN endpoint alone, so an empty read is the
+   * tail except when a write landed while it was parked; those stay put.
+   */
+  #foldEmptyRead(record: UsbLogRecord): void {
+    if (!this.#coalesceEmptyReads) return;
+    const last = this.log.length - 1;
+    if (this.log[last] !== record) return;
+
+    const previous = this.log[last - 1];
+    if (
+      previous !== undefined &&
+      previous.repeated !== undefined &&
+      previous.op === 'transferIn' &&
+      previous.length === 0 &&
+      previous.error === undefined &&
+      previous.status === record.status &&
+      previous.args?.endpointNumber === record.args?.endpointNumber &&
+      previous.args?.requested === record.args?.requested
+    ) {
+      previous.repeated += 1;
+      previous.ms += record.ms;
+      this.log.pop();
+      // Hand the dropped record's number back, so `seq` stays gapless and goes
+      // on meaning "position in this log".
+      if (record.seq === this.#seq - 1) this.#seq -= 1;
+      return;
+    }
+    record.repeated = 1;
   }
 
   transferOut(endpointNumber: number, data: BufferSource): Promise<USBOutTransferResult> {
@@ -185,6 +251,7 @@ export function summarizeUsbLog(log: readonly UsbLogRecord[]): {
   transfersIn: number;
   bytesIn: number;
   inSizes: Record<string, number>;
+  emptyReads: number;
   errors: number;
   stalls: number;
 } {
@@ -193,6 +260,7 @@ export function summarizeUsbLog(log: readonly UsbLogRecord[]): {
   let outMs = 0;
   let transfersIn = 0;
   let bytesIn = 0;
+  let emptyReads = 0;
   let errors = 0;
   let stalls = 0;
   const inSizes: Record<string, number> = {};
@@ -205,11 +273,18 @@ export function summarizeUsbLog(log: readonly UsbLogRecord[]): {
       bytesOut += record.length ?? 0;
       outMs += record.ms;
     }
-    if (record.op === 'transferIn' && !record.error && (record.length ?? 0) > 0) {
-      transfersIn += 1;
-      bytesIn += record.length ?? 0;
-      const key = String(record.length);
-      inSizes[key] = (inSizes[key] ?? 0) + 1;
+    if (record.op === 'transferIn' && !record.error) {
+      if ((record.length ?? 0) > 0) {
+        transfersIn += 1;
+        bytesIn += record.length ?? 0;
+        const key = String(record.length);
+        inSizes[key] = (inSizes[key] ?? 0) + 1;
+      } else {
+        // Counted from the fold, so the real number survives even though the
+        // log holds one entry per run rather than one per call. How hard an
+        // idle link gets polled is a finding in its own right.
+        emptyReads += record.repeated ?? 1;
+      }
     }
   }
 
@@ -221,6 +296,7 @@ export function summarizeUsbLog(log: readonly UsbLogRecord[]): {
     transfersIn,
     bytesIn,
     inSizes,
+    emptyReads,
     errors,
     stalls,
   };
