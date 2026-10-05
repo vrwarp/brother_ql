@@ -578,6 +578,20 @@ unless you opt in. Attach the bundle to a
 printer that misbehaved is worth even more than one from a printer that
 worked.
 
+**Below the browser: Android USB diagnostics.** When the printer never reaches
+the page at all — the chooser is empty, or the device appears and vanishes —
+the evidence is in the tablet's kernel and USB service, not in WebUSB.
+`scripts/android_usb_diag.py` records it over adb: Type-C role and orientation,
+extcon and gadget state, power-supply readings, every USB device that
+enumerates (with its descriptors and bound driver), `dumpsys usb` port status,
+OTG settings and logcat, all on one clock, then writes `timeline.txt`, a
+`summary.md` of what looks wrong, and a ZIP of the lot. The printer needs the
+tablet's only USB-C port, so run `wifi-setup` once and record with `live` over
+Wi-Fi (a guided test: adapter alone, printer attached, plug flipped, a print, an
+idle period), or use `start` and `collect` to leave the recorder running on the
+tablet while the computer is unplugged. No root needed; `--root` adds the
+kernel log.
+
 The wizard's engine (ZIP writer, session persistence, resilient step runner,
 raw-USB recording proxy, test card painter, bundle assembler) is unit-tested
 in `test/diagnostics-app.test.ts`, and `scripts/smoke-diagnostics.mjs` drives
