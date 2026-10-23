@@ -53,12 +53,38 @@ interface State {
 const MODEL_STORAGE_KEY = 'brother-ql-demo.model';
 const LABEL_STORAGE_KEY = 'brother-ql-demo.label';
 
+// Storage can throw (blocked site data, private windows, a full quota), and a
+// remembered choice is a convenience: the demo must work without it.
+function readStored(key: string): string | null {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function writeStored(key: string, value: string): void {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    // Not remembered; nothing else depends on it.
+  }
+}
+
+/** The remembered model, unless it no longer names a model this build knows. */
+function storedModelId(): string {
+  const stored = readStored(MODEL_STORAGE_KEY);
+  return stored !== null && ALL_MODELS.some((model) => model.identifier === stored)
+    ? stored
+    : 'QL-820NWB';
+}
+
 const store = new Store<State>({
   printer: null,
   deviceName: '',
   status: null,
-  modelId: localStorage.getItem(MODEL_STORAGE_KEY) ?? 'QL-820NWB',
-  labelId: localStorage.getItem(LABEL_STORAGE_KEY) ?? '62',
+  modelId: storedModelId(),
+  labelId: readStored(LABEL_STORAGE_KEY) ?? '62',
   image: null,
   imageName: '',
   options: {
@@ -482,7 +508,7 @@ function renderMediaHint(status: PrinterStatus | null): void {
     button.addEventListener('click', () => {
       labelSelect.value = label.identifier;
       store.update({ labelId: label.identifier });
-      localStorage.setItem(LABEL_STORAGE_KEY, label.identifier);
+      writeStored(LABEL_STORAGE_KEY, label.identifier);
       syncRedAvailability();
       refreshPreview();
     });
@@ -575,7 +601,7 @@ renderSizeHint();
 
 modelSelect.addEventListener('change', () => {
   store.update({ modelId: modelSelect.value });
-  localStorage.setItem(MODEL_STORAGE_KEY, modelSelect.value);
+  writeStored(MODEL_STORAGE_KEY, modelSelect.value);
   populateLabels();
   syncRedAvailability();
   renderSizeHint();
@@ -585,7 +611,7 @@ modelSelect.addEventListener('change', () => {
 
 labelSelect.addEventListener('change', () => {
   store.update({ labelId: labelSelect.value });
-  localStorage.setItem(LABEL_STORAGE_KEY, labelSelect.value);
+  writeStored(LABEL_STORAGE_KEY, labelSelect.value);
   syncRedAvailability();
   renderSizeHint();
   refreshPreview();
