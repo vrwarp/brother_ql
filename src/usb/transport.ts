@@ -206,6 +206,13 @@ export class UsbTransport extends TypedEventTarget<TransportEvents> {
     // reopening starts from a known state.
     if (this.#state === 'dead') await this.close();
 
+    // Both waits above yield, so a concurrent open() may have run its own
+    // teardown and started opening in the meantime. Join it instead of
+    // starting a second open, which would claim the interface twice and spawn
+    // a second reader on the one IN endpoint.
+    if (this.#state === 'open') return;
+    if (this.#openPromise) return this.#openPromise;
+
     this.#openPromise = this.#doOpen();
     try {
       await this.#openPromise;
