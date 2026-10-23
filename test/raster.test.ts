@@ -193,13 +193,17 @@ describe('raster data', () => {
 
   it('rejects images that are not the width of the print head', () => {
     const r = raster('QL-700');
-    expect(() => r.addRasterData(plane(1296))).toThrow(RasterError);
+    let caught: unknown;
     try {
       r.addRasterData(plane(1296));
     } catch (error) {
-      expect((error as RasterError).expected?.[0]).toBe(720);
-      expect((error as RasterError).actual?.[0]).toBe(1296);
+      caught = error;
     }
+    // Asserted outside the catch so a call that stops throwing fails the test
+    // rather than skipping the checks.
+    expect(caught).toBeInstanceOf(RasterError);
+    expect((caught as RasterError).expected?.[0]).toBe(720);
+    expect((caught as RasterError).actual?.[0]).toBe(1296);
   });
 
   it('rejects mismatched colour planes', () => {

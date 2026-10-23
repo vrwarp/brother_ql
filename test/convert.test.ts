@@ -80,13 +80,17 @@ describe('prepareImage geometry', () => {
   });
 
   it('rejects a die-cut image of the wrong size', () => {
-    expect(() => prepareImage(solidImage(100, 100), 'QL-700', '62x29')).toThrow(RasterError);
+    let caught: unknown;
     try {
       prepareImage(solidImage(100, 100), 'QL-700', '62x29');
     } catch (error) {
-      expect((error as RasterError).expected).toEqual([696, 271]);
-      expect((error as RasterError).actual).toEqual([100, 100]);
+      caught = error;
     }
+    // Asserted outside the catch so a call that stops throwing fails the test
+    // rather than skipping the checks.
+    expect(caught).toBeInstanceOf(RasterError);
+    expect((caught as RasterError).expected).toEqual([696, 271]);
+    expect((caught as RasterError).actual).toEqual([100, 100]);
   });
 
   it('rejects an endless image of the wrong width, naming the right one', () => {
