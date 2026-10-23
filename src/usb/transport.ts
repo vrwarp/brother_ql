@@ -210,7 +210,9 @@ export class UsbTransport extends TypedEventTarget<TransportEvents> {
     // teardown and started opening in the meantime. Join it instead of
     // starting a second open, which would claim the interface twice and spawn
     // a second reader on the one IN endpoint.
-    if (this.#state === 'open') return;
+    // Read through the getter: the check at the top narrowed #state, and
+    // TypeScript does not widen it back across the awaits.
+    if (this.opened) return;
     if (this.#openPromise) return this.#openPromise;
 
     this.#openPromise = this.#doOpen();
