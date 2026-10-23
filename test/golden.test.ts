@@ -74,6 +74,11 @@ describe('golden jobs', () => {
     expect(actual.length).toBe(expected.length);
   });
 
+  it('has cases of both kinds, so neither it.each above can run empty', () => {
+    expect(exactCases.length).toBeGreaterThan(0);
+    expect(framingCases.length).toBeGreaterThan(0);
+  });
+
   it('covers every model in the table', () => {
     const covered = new Set(manifest.cases.map((c) => c.model));
     expect(covered.size).toBe(19);
