@@ -187,7 +187,9 @@ Import the two halves separately so neither side carries the other's weight:
 import { createJob } from '@vrwarp/brother-ql-webusb/convert';
 
 self.onmessage = ({ data }) => {
-  const bytes = createJob(data.model, [data.image], data.label, { copies: data.copies });
+  // createJob has no `copies` option (that belongs to print()): one page per image.
+  const images = Array.from({ length: data.copies }, () => data.image);
+  const bytes = createJob(data.model, images, data.label);
   self.postMessage(bytes, [bytes.buffer]); // transfer, don't copy
 };
 ```

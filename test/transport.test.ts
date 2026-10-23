@@ -114,13 +114,17 @@ describe('opening a device', () => {
     });
     const transport = new UsbTransport(device);
 
-    await expect(transport.open()).rejects.toBeInstanceOf(InterfaceClaimError);
+    let caught: unknown;
     try {
       await transport.open();
     } catch (error) {
-      expect((error as InterfaceClaimError).code).toBe('claim-failed');
-      expect((error as Error).message).toMatch(/claim the printer interface/);
+      caught = error;
     }
+    // Asserted outside the catch so a call that stops throwing fails the test
+    // rather than skipping the checks.
+    expect(caught).toBeInstanceOf(InterfaceClaimError);
+    expect((caught as InterfaceClaimError).code).toBe('claim-failed');
+    expect((caught as Error).message).toMatch(/claim the printer interface/);
   });
 
   it('rejects a device with no printer interface', async () => {

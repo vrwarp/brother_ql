@@ -9,7 +9,7 @@
  * change into printing, one completion per page, and a phase change back.
  */
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { analyzeInstructions, summarizeJob } from '../src/analyze.js';
 import { createJob } from '../src/convert.js';
@@ -306,8 +306,7 @@ describe('a full print session', () => {
 
     device.pushRead(makeStatusPacket({ statusTypeCode: 0x02, errorInfo2: 0x10 }));
     // Let the reader deliver it into the queue before the job starts.
-    await new Promise((resolve) => setTimeout(resolve, 10));
-    expect(printer.transport.statusQueue.size).toBe(1);
+    await vi.waitFor(() => expect(printer.transport.statusQueue.size).toBe(1));
 
     const image = noisyImage(41, 696, 40);
     const result = await printer.print(image, { label: '62', statusTimeoutMs: 2000 });
