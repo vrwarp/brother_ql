@@ -24,6 +24,7 @@ import { connect, type Socket } from 'node:net';
 
 import type { WebSocket } from 'ws';
 
+import type { EphemeralTokens } from './ephemeral.js';
 import { JobTracker, type JobMeta } from './jobs.js';
 import { hex, type Logger, type LogLevel } from './log.js';
 import {
@@ -70,9 +71,14 @@ export interface SessionContext {
   recentJobs: number;
   /** Frames quiet for this long end an unreported job. */
   jobIdleMs: number;
+  /** Short-lived tokens the admin API mints for its own page. */
+  ephemeral?: EphemeralTokens;
   /** Replaceable for tests. */
   snmpGet?: typeof snmpGet;
 }
+
+/** The id a session carries when it authenticated with an ephemeral token. */
+export const EPHEMERAL_TOKEN_ID = 'ephemeral';
 
 export function describePrinter(record: PrinterRecord, locks: PrinterLocks): BridgePrinterInfo {
   const info: BridgePrinterInfo = {
@@ -258,7 +264,15 @@ export class ClientSession {
       this.#send({ type: 'auth-ok', printers: this.#printers() });
       return;
     }
-    const record = this.#ctx.store.tokens.find((candidate) => tokenMatches(token, candidate.hash));
+    const stored = this.#ctx.store.tokens.find((candidate) => tokenMatches(token, candidate.hash));
+    // The admin page prints its test labels with a token minted a moment ago
+    // and kept only in memory; it looks like any other client from here on.
+    const grant = stored ? null : this.#ctx.ephemeral?.find(token);
+    const record: TokenRecord | null =
+      stored ??
+      (grant
+        ? { id: EPHEMERAL_TOKEN_ID, name: grant.name, hash: '', hint: 'ephemeral', createdAt: new Date().toISOString() }
+        : null);
     if (!record) {
       this.#log('warn', 'rejected token', { hint: token.slice(0, 12) });
       this.#send({ type: 'error', code: 'unauthorized', message: 'Unknown token.' });
@@ -268,7 +282,7 @@ export class ClientSession {
     this.#token = record;
     if (this.#authTimer) clearTimeout(this.#authTimer);
     this.#authTimer = null;
-    void this.#ctx.store.touchToken(record.id);
+    if (record.id !== EPHEMERAL_TOKEN_ID) void this.#ctx.store.touchToken(record.id);
     this.#log('info', 'client authenticated', {});
     this.#send({ type: 'auth-ok', printers: this.#printers() });
   }

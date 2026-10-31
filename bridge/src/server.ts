@@ -11,7 +11,8 @@ import type { AddressInfo } from 'node:net';
 import { WebSocketServer } from 'ws';
 
 import type { BridgeConfig } from './config.js';
-import { originAllowed } from './config.js';
+import { EphemeralTokens } from './ephemeral.js';
+import { originAllowedForRequest } from './origin.js';
 import { createHttpHandler, type HttpContext } from './http.js';
 import type { Logger } from './log.js';
 import { ClientSession, PrinterLocks, type SessionContext } from './session.js';
@@ -32,6 +33,8 @@ export interface BridgeServerOptions {
   log: Logger;
   snmpGet?: SessionContext['snmpGet'];
   probe?: HttpContext['probe'];
+  /** Where the admin page's library bundle lives; tests point it at a fixture. */
+  adminLibPath?: string;
 }
 
 /**
@@ -60,7 +63,17 @@ export function createBridgeServer(options: BridgeServerOptions): BridgeServer {
   const locks = new PrinterLocks();
 
   const startedAt = new Date();
-  const handler = createHttpHandler({ config, store, locks, log, probe: options.probe, startedAt });
+  const ephemeral = new EphemeralTokens();
+  const handler = createHttpHandler({
+    config,
+    store,
+    locks,
+    log,
+    probe: options.probe,
+    startedAt,
+    ephemeral,
+    adminLibPath: options.adminLibPath,
+  });
   const server: HttpServer =
     config.tlsCertFile && config.tlsKeyFile
       ? createHttpsServer(
@@ -79,6 +92,7 @@ export function createBridgeServer(options: BridgeServerOptions): BridgeServer {
     snmpTimeoutMs: config.snmpTimeoutMs,
     recentJobs: config.recentJobs,
     jobIdleMs: config.jobIdleMs,
+    ephemeral,
     snmpGet: options.snmpGet,
   };
 
@@ -90,7 +104,7 @@ export function createBridgeServer(options: BridgeServerOptions): BridgeServer {
       return;
     }
     const origin = typeof req.headers.origin === 'string' ? req.headers.origin : undefined;
-    if (!originAllowed(origin, config.allowedOrigins)) {
+    if (!originAllowedForRequest(req.headers, config.allowedOrigins)) {
       log('info', 'rejected websocket origin', { origin });
       socket.write('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n');
       socket.destroy();

@@ -282,3 +282,58 @@ describe('jobs, statistics and diagnostics', () => {
     expect((await call('/api/admin/stats', { method: 'POST', body: '{}' })).status).toBe(405);
   });
 });
+
+describe('the admin page\'s own printing', () => {
+  it('mints an ephemeral token that is never listed', async () => {
+    const res = await call('/api/admin/tokens/ephemeral', { method: 'POST', body: JSON.stringify({ name: 'Admin page' }) });
+    expect(res.status).toBe(201);
+    const minted = await body(res);
+    expect(minted.token).toMatch(/^bql_/);
+    expect(minted.expiresInSeconds).toBeGreaterThan(500);
+    const list = await body(await call('/api/admin/tokens'));
+    expect(list.tokens).toEqual([]);
+    // It works as a client token for the REST list…
+    expect((await call('/api/printers', {}, minted.token)).status).toBe(200);
+    // …and needs the admin token to mint.
+    expect((await call('/api/admin/tokens/ephemeral', { method: 'POST', body: '{}' }, '')).status).toBe(401);
+  });
+
+  it('serves the bundled library at /admin/lib.js, and says when it is missing', async () => {
+    const missing = await fetch(base + '/admin/lib.js');
+    expect(missing.status).toBe(404);
+    expect((await body(missing)).error).toMatch(/npm run build/);
+
+    await server.stop();
+    const { mkdtemp, writeFile } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const dir = await mkdtemp(join(tmpdir(), 'bql-lib-'));
+    const file = join(dir, 'admin-lib.js');
+    await writeFile(file, 'export const ok = true;\n');
+    const config = loadConfig({ ADMIN_TOKEN: ADMIN });
+    server = createBridgeServer({ config, store, log: silentLogger, adminLibPath: file, probe: async () => lastProbe as never });
+    const address = await server.start(0);
+    base = `http://127.0.0.1:${address.port}`;
+    const res = await fetch(base + '/admin/lib.js');
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toMatch(/javascript/);
+    expect(await res.text()).toContain('export const ok');
+    expect((await fetch(base + '/admin/lib.js', { method: 'POST' })).status).toBe(405);
+  });
+
+  it('lets the admin page call its own API when ALLOWED_ORIGINS names only the kiosk', async () => {
+    await server.stop();
+    const config = loadConfig({ ADMIN_TOKEN: ADMIN, ALLOWED_ORIGINS: 'https://kiosk.example' });
+    server = createBridgeServer({ config, store, log: silentLogger, probe: async () => lastProbe as never });
+    const address = await server.start(0);
+    base = `http://127.0.0.1:${address.port}`;
+    const own = await fetch(base + '/api/admin/session', {
+      headers: { origin: base, authorization: `Bearer ${ADMIN}` },
+    });
+    expect(own.status).toBe(200);
+    const other = await fetch(base + '/api/admin/session', {
+      headers: { origin: 'https://evil.example', authorization: `Bearer ${ADMIN}` },
+    });
+    expect(other.status).toBe(403);
+  });
+});

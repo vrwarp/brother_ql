@@ -10,11 +10,12 @@
   },
   "main": "dist/index.js",
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
+    "build": "tsc -p tsconfig.build.json && node scripts/bundle-admin-lib.mjs",
     "start": "node dist/index.js",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "bundle:admin": "node scripts/bundle-admin-lib.mjs"
   },
   "dependencies": {
     "ws": "^8.18.0"
@@ -22,6 +23,8 @@
   "devDependencies": {
     "@types/node": "^22.10.0",
     "@types/ws": "^8.5.13",
+    "@vrwarp/brother-ql-webusb": "^0.1.202610310701",
+    "esbuild": "^0.24.2",
     "typescript": "^5.7.2",
     "vitest": "^2.1.8"
   }

@@ -30,6 +30,12 @@ Changes to the Python package are not tracked here.
   **Download diagnostics** button bundles with the (secret-free) configuration
   for a bug report. Bridge protocol version 2 adds the `job` and `job-done`
   messages the log is built from.
+- **A test label from the bridge's admin page.** Each registered printer has a
+  *Test label* button: the page rasterises a test card with the library in the
+  browser, mints itself a ten-minute token, and prints through the bridge as an
+  ordinary client, so the job lands in the print log. The bridge still never
+  touches pixels. The bridge's own origin is now always allowed, so a
+  restricted `ALLOWED_ORIGINS` no longer locks the admin page out of its own API.
 - **Faults mid-job over SNMP.** On a transport that cannot volunteer status the
   library now polls during the transfer as well (`midJobStatusIntervalMs`), so a
   cover opened during a long job aborts it within about a second, as it would

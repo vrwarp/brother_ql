@@ -62,6 +62,15 @@ Served at `/`, it does two things:
   **Probe** opens the printer's port and fetches a status, so you can confirm a
   printer is reachable and loaded before anyone prints to it.
 
+  **Test label** prints one. The page draws the label in the browser with the
+  same library a kiosk uses (bundled into the page at build time), reads the
+  loaded roll off the printer to pick the right size, and sends it through
+  this bridge as an ordinary client, so the job appears in the print log like
+  any other. The bridge itself still never rasterises anything. The page uses
+  a short-lived token the admin API mints for it (`POST
+  /api/admin/tokens/ephemeral`, ten minutes, kept in memory only, never
+  listed), so no permanent client token is needed to press the button.
+
 ## A walk through the admin page
 
 Sign in with the admin token. A wrong token is refused in place.
@@ -84,6 +93,11 @@ A printer that cannot be reached says so, for both the port and the status
 path, so a wrong address is caught before anyone prints to it.
 
 ![Probe of an unreachable printer](docs/screenshots/07-probe-unreachable.png)
+
+**Test label** prints one through the bridge from the page itself, picking the
+roll the printer reports, and the print log below records it.
+
+![A test label printed from the admin page](docs/screenshots/11-test-label.png)
 
 The page follows the system colour scheme and fits a phone. The screenshots
 are regenerated with `node scripts/screenshots.mjs` after `npm run build`
@@ -134,7 +148,7 @@ All via environment variables; the defaults suit the container.
 | `PORT` | `8080` | TCP port to listen on. |
 | `HOST` | `0.0.0.0` | Address to bind. |
 | `DATA_DIR` | `/data` | Where `bridge.json` (tokens and printers) is kept. Mount a volume here. |
-| `ALLOWED_ORIGINS` | `*` | Comma-separated browser origins allowed to connect, or `*` for any. The bearer token is the real access control; this is defence in depth. |
+| `ALLOWED_ORIGINS` | `*` | Comma-separated browser origins allowed to connect, or `*` for any. The bridge's own origin — the admin page — is always allowed. The bearer token is the real access control; this is defence in depth. |
 | `TLS_CERT_FILE`, `TLS_KEY_FILE` | — | PEM files. Set both to serve HTTPS and `wss://` directly instead of behind a TLS proxy. |
 | `AUTH_TIMEOUT_MS` | `10000` | How long a connection may stay unauthenticated. |
 | `CONNECT_TIMEOUT_MS` | `5000` | How long to wait for a printer's port 9100 to accept. |
