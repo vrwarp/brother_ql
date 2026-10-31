@@ -10,6 +10,21 @@ Changes to the Python package are not tracked here.
 
 ### Added
 
+- **Printing over Wi-Fi, through a bridge.** A networked Brother QL listens for
+  jobs on raw TCP port 9100, which a browser cannot open, so a small
+  WebSocket-to-9100 relay stands in the middle — the `bridge/` directory,
+  published as a Docker image, with a bearer-token admin interface, a printer
+  registry and SNMP status. It does not rasterise: the job is still built in the
+  client. The library reaches it through `BridgeTransport`, which implements the
+  same `Transport` interface as the USB transport, so `BrotherQLPrinter` drives a
+  Wi-Fi printer exactly as a USB one. `listBridgePrinters()` lists what the bridge
+  offers. Because a networked printer does not volunteer completion packets,
+  `PrintResult` now carries a `confirmation` field (`pages`, `phase` or `none`)
+  saying how the result was established. See the Wi-Fi section of the README.
+- **A transport seam.** The printer core now accepts any `Transport`, not only a
+  WebUSB device; `UsbTransport` and `BridgeTransport` both implement it, and the
+  status-packet reframer (`StatusFramer`) is shared between them. `printer.device`
+  is `undefined` for a non-USB transport.
 - **WebUSB printing.** `BrotherQLPrinter` pairs with a printer, reports its status,
   and prints with progress reporting and typed errors. Confirmed end to end on a
   QL-810W on 2026-08-02; the remaining models rest on the protocol comparison

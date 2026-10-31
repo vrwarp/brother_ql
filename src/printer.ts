@@ -21,6 +21,7 @@ import { BrotherQLRaster } from './raster.js';
 export {
   BrotherQLPrinterCore,
   type JobProgress,
+  type PrintConfirmation,
   type PrintProgress,
   type PrintResult,
   type PrinterEvents,
@@ -199,7 +200,11 @@ export class BrotherQLPrinter extends BrotherQLPrinterCore {
       );
 
       if (options.nonBlocking) {
-        return { pagesPrinted: progress.pagesPrinted, lastStatus: progress.lastStatus };
+        return {
+          pagesPrinted: progress.pagesPrinted,
+          lastStatus: progress.lastStatus,
+          confirmation: 'none',
+        };
       }
 
       return await this.awaitCompletion(progress, idleMs, onPageDone);

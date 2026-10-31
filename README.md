@@ -211,6 +211,61 @@ normaliser has nothing to resample.
 `./labels` and `./models` are exported the same way, for a media or model picker
 that has no reason to pull in either half.
 
+### Printing over Wi-Fi (the bridge)
+
+WebUSB reaches a printer on a cable. A printer on Wi-Fi listens for jobs on raw
+TCP port 9100, which a browser cannot open — so a small relay stands in the
+middle. The [`bridge/`](./bridge/README.md) directory is that relay: a
+WebSocket-to-9100 service with a bearer-token admin interface and a printer
+registry, published as a Docker image. **It does not rasterise** — the job is
+still built here, in the client, and the bridge only forwards the bytes.
+
+The library speaks to it through `BridgeTransport`, which implements the same
+`Transport` interface as the USB transport, so `BrotherQLPrinter` drives a Wi-Fi
+printer exactly as it drives a USB one:
+
+```ts
+import {
+  BrotherQLPrinter,
+  BridgeTransport,
+  listBridgePrinters,
+  enableBrowserImages,
+} from '@vrwarp/brother-ql-webusb';
+
+const url = 'wss://bridge.example/ws';
+const token = '…a client token from the bridge admin page…';
+
+const printers = await listBridgePrinters({ url, token }); // for a picker
+const transport = new BridgeTransport({ url, token, printerId: printers[0].id });
+const printer = new BrotherQLPrinter(transport, { model: 'QL-810W' });
+enableBrowserImages(printer);
+
+await printer.open();
+const result = await printer.print(canvas, { label: '62' });
+await printer.close();
+```
+
+Outside a browser, where there is no global `WebSocket`, pass one in:
+`new BridgeTransport({ url, token, printerId, webSocketFactory: (u) => new WebSocket(u) })`.
+
+What differs from USB is how a job's completion is known, because a networked
+printer does not volunteer "printing completed" packets the way a USB one does.
+The transport reports this through `result.confirmation`, following the
+printer's registered status mode:
+
+| Status mode | `confirmation` | How a job is confirmed |
+| --- | --- | --- |
+| `tcp` (answers on 9100) | `pages` | Per-page completion packets, as over USB. |
+| `snmp` (QL-810W, 820NWB, 1110NWB) | `phase` | The printer is polled over SNMP until it returns to the waiting phase. |
+| `none` | `none` | The bytes were accepted; nothing more is known. |
+
+A non-blocking job always reports `none`. Status queries (`queryStatus`,
+`suggestLabels`) work over the bridge whenever the printer's status mode is not
+`none`, fetched over SNMP or 9100 by the bridge and decoded here unchanged.
+
+Running the bridge, its admin interface, the Docker image and the security
+notes are covered in [`bridge/README.md`](./bridge/README.md).
+
 ### Errors
 
 Every error carries a stable `code`:
@@ -230,6 +285,7 @@ Every error carries a stable `code`:
 | `unknown-model`, `unknown-label` | Bad identifier |
 | `busy` | Another operation is in progress |
 | `malformed-status` | An unparseable status packet |
+| `bridge` | A Wi-Fi bridge connection failed or was refused; carries a `reason` |
 
 ### Diagnostics
 

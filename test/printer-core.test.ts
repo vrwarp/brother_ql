@@ -160,7 +160,7 @@ describe('BrotherQLPrinterCore', () => {
     await printer.open();
 
     const result = await printer.sendRaw(Uint8Array.from([0x1b, 0x40]), { nonBlocking: true });
-    expect(result).toEqual({ pagesPrinted: 0, lastStatus: null });
+    expect(result).toEqual({ pagesPrinted: 0, lastStatus: null, confirmation: 'none' });
   });
 
   it('refuses to interleave two operations on one endpoint', async () => {

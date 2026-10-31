@@ -1,0 +1,6 @@
+# Bridge build artifacts
+dist/
+coverage/
+# Local state the bridge writes at runtime
+bridge.json
+data/

@@ -1,0 +1,65 @@
+name: Bridge build (dry run)
+
+# The bridge's pull-request gate. Everything the publish workflow does, up to
+# but not including the push: the TypeScript is checked and tested, and the
+# Docker image is built for both architectures and then discarded. A merge
+# cannot ship an image that this did not first prove builds — see
+# bridge-publish.yml, which runs only on master.
+#
+# Scoped to the bridge: nothing here depends on the library, and the library's
+# own CI (ci.yml) already covers src/.
+on:
+  pull_request:
+    paths:
+      - 'bridge/**'
+      - '.github/workflows/bridge-build.yml'
+  workflow_dispatch:
+
+# A new push to the same PR makes an in-flight run obsolete; cancel it.
+concurrency:
+  group: bridge-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Typecheck and test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: bridge
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: bridge/package-lock.json
+
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+
+  image:
+    name: Build image (no push)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Both architectures the publish workflow ships, so a PR catches an
+      # arm64-only break (a native dependency, say) before it reaches master.
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      # Build and throw away: push is false, so no registry and no credentials
+      # are involved. The build cache is shared with later runs through the
+      # GitHub Actions cache backend.
+      - name: Build
+        uses: docker/build-push-action@v6
+        with:
+          context: ./bridge
+          platforms: linux/amd64,linux/arm64
+          push: false
+          tags: brother-ql-bridge:pr-${{ github.event.pull_request.number || github.run_id }}
+          cache-from: type=gha,scope=bridge
+          cache-to: type=gha,scope=bridge,mode=max

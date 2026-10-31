@@ -283,7 +283,7 @@ describe('BrotherQLPrinter pairing helpers', () => {
 
     const printers = await BrotherQLPrinter.getPairedDevices();
     expect(printers).toHaveLength(2);
-    expect(printers.map((p) => p.device.productName)).toEqual(['QL-800', 'QL-1100']);
+    expect(printers.map((p) => p.device?.productName)).toEqual(['QL-800', 'QL-1100']);
   });
 
   it('reports support through the printer class too', async () => {

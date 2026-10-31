@@ -1,0 +1,120 @@
+name: Bridge publish (Docker Hub)
+
+# The bridge's release. Every merge to master that touched bridge/ builds the
+# image for amd64 and arm64 and pushes it to Docker Hub. This is the only
+# workflow that pushes; the pull-request workflow (bridge-build.yml) builds the
+# same image and discards it, so a merge cannot ship something that never built.
+#
+# Tags pushed:
+#   latest                 — moves to the newest master build
+#   sha-<short>            — the exact commit, immutable
+#   <yyyymmdd>-<short>     — a sortable, human-readable release marker
+#
+# Configuration:
+#   secrets.DOCKERHUB_USERNAME  Docker Hub account (also the default namespace)
+#   secrets.DOCKERHUB_TOKEN     a Docker Hub access token with write scope
+#   vars.DOCKERHUB_REPO         optional: the full repo, e.g. acme/ql-bridge;
+#                               defaults to <username>/brother-ql-bridge
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'bridge/**'
+      - '.github/workflows/bridge-publish.yml'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Build both architectures but do not push'
+        type: boolean
+        default: false
+
+# Two pushes of one image at once is never wanted, and a half-pushed manifest
+# is worse than a slow one — queue rather than cancel.
+concurrency:
+  group: bridge-publish
+  cancel-in-progress: false
+
+jobs:
+  # Re-run the checks here too, so a red commit on master fails before it ships
+  # rather than relying on the PR gate alone.
+  test:
+    name: Typecheck and test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: bridge
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: bridge/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+
+  publish:
+    name: Build and push
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      # Fail early and clearly if the registry credentials are not configured,
+      # rather than deep inside the push step with an opaque auth error.
+      - name: Check Docker Hub credentials are present
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          if [ -z "$DOCKERHUB_USERNAME" ] || [ -z "$DOCKERHUB_TOKEN" ]; then
+            echo "::error::Set the DOCKERHUB_USERNAME and DOCKERHUB_TOKEN repository secrets before publishing the bridge image."
+            exit 1
+          fi
+
+      - name: Work out the image name
+        id: image
+        env:
+          REPO: ${{ vars.DOCKERHUB_REPO }}
+          USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+        run: |
+          name="${REPO:-$USERNAME/brother-ql-bridge}"
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+          echo "::notice::Publishing to docker.io/$name"
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # latest, the immutable commit sha, and a sortable date+sha marker.
+      - name: Tags and labels
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ steps.image.outputs.name }}
+          tags: |
+            type=raw,value=latest
+            type=sha,prefix=sha-
+            type=raw,value={{date 'YYYYMMDD'}}-{{sha}}
+          labels: |
+            org.opencontainers.image.title=Brother QL bridge
+            org.opencontainers.image.description=WebSocket to TCP 9100 relay for Brother QL label printers on Wi-Fi.
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: ./bridge
+          platforms: linux/amd64,linux/arm64
+          push: ${{ !inputs.dry_run }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=bridge
+          cache-to: type=gha,scope=bridge,mode=max

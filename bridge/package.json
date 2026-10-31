@@ -1,0 +1,28 @@
+{
+  "name": "brother-ql-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "description": "WebSocket to TCP 9100 relay for Brother QL label printers on Wi-Fi, with bearer tokens, a printer registry and SNMP status. The companion to @vrwarp/brother-ql-webusb's BridgeTransport.",
+  "type": "module",
+  "license": "GPL-3.0-or-later",
+  "engines": {
+    "node": ">=22"
+  },
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "start": "node dist/index.js",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/ws": "^8.5.13",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  }
+}

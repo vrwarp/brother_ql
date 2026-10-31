@@ -702,8 +702,8 @@ async function connect(): Promise<void> {
     const device = printer.device;
     store.update({
       printer,
-      deviceName: `${device.productName ?? 'Brother printer'}${
-        device.serialNumber ? ` (${device.serialNumber})` : ''
+      deviceName: `${device?.productName ?? 'Brother printer'}${
+        device?.serialNumber ? ` (${device.serialNumber})` : ''
       }`,
     });
     setMessage('ok', 'Connected.');
@@ -794,7 +794,7 @@ void (async () => {
   const first = paired[0];
   if (!first) return;
   store.update({
-    deviceName: `${first.device.productName ?? 'Brother printer'} (previously paired)`,
+    deviceName: `${first.device?.productName ?? 'Brother printer'} (previously paired)`,
   });
   setMessage('warn', 'A previously paired printer was found. Press Connect to use it.');
 })();

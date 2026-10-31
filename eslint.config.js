@@ -3,7 +3,17 @@ import tseslint from 'typescript-eslint';
 
 export default tseslint.config(
   {
-    ignores: ['dist/**', 'demo/dist/**', 'node_modules/**', 'brother_ql/**', 'test/fixtures/**'],
+    // The bridge (bridge/) is a separate Node package with its own tsconfig and
+    // test suite; it is linted and type-checked there, not as part of the
+    // browser library's lint.
+    ignores: [
+      'dist/**',
+      'demo/dist/**',
+      'node_modules/**',
+      'brother_ql/**',
+      'test/fixtures/**',
+      'bridge/**',
+    ],
   },
   js.configs.recommended,
   ...tseslint.configs.recommended,

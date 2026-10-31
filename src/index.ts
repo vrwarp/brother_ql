@@ -39,6 +39,7 @@ export {
   BrotherQLPrinterCore,
   type ImageNormalizer,
   type JobProgress,
+  type PrintConfirmation,
   type PrinterEvents,
   type PrinterOptions,
   type PrintOptions,
@@ -72,6 +73,28 @@ export {
   type TransportOptions,
 } from './usb/transport.js';
 export { AsyncQueue, QueueTimeoutError, type TakeOptions } from './usb/async-queue.js';
+export { StatusFramer, isTransport, type CompletionMode, type Transport } from './transport.js';
+
+// --- Wi-Fi printers, through the bridge -----------------------------------
+export {
+  BridgeTransport,
+  defaultWebSocketFactory,
+  listBridgePrinters,
+  type BridgeOptions,
+  type BridgePrinterInfo,
+  type BridgeStatusMode,
+  type BridgeTransportOptions,
+  type MinimalSocketEvent,
+  type MinimalWebSocket,
+  type WebSocketFactory,
+} from './bridge/transport.js';
+export {
+  BRIDGE_PROTOCOL_VERSION,
+  parseServerMessage,
+  type BridgeClientMessage,
+  type BridgeErrorCode,
+  type BridgeServerMessage,
+} from './bridge/protocol.js';
 
 // --- job construction -----------------------------------------------------
 export {
@@ -173,6 +196,7 @@ export {
 
 // --- errors ---------------------------------------------------------------
 export {
+  BridgeError,
   BrotherQLError,
   BusyError,
   DeviceDisconnectedError,

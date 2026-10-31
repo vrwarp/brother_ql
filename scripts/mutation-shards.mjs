@@ -48,6 +48,10 @@ export const SHARDS = [
     name: 'usb',
     mutate: ['src/usb/transport.ts', 'src/usb/discovery.ts', 'src/usb/async-queue.ts'],
   },
+  {
+    name: 'bridge',
+    mutate: ['src/transport.ts', 'src/bridge/transport.ts', 'src/bridge/protocol.ts'],
+  },
 ];
 
 /** Where a shard's JSON report is parked for the summary to pick up. */
