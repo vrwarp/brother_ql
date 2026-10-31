@@ -16,7 +16,7 @@ export const ADMIN_PAGE = /* html */ `<!doctype html>
 <title>Brother QL bridge</title>
 <style>
   :root { --bg:#f6f7f9; --fg:#1b1f24; --muted:#5b6470; --card:#fff; --line:#d9dee5; --accent:#0b5fff; --danger:#b42318; --ok:#067647; --warn:#b54708; }
-  @media (prefers-color-scheme: dark) { :root { --bg:#0f1115; --fg:#e6e8eb; --muted:#9aa4b2; --card:#171a20; --line:#2a2f38; --accent:#6ea0ff; --danger:#f97066; --ok:#4ade80; --warn:#fdb022; } }
+  @media (prefers-color-scheme: dark) { :root { --bg:#0f1115; --fg:#e6e8eb; --muted:#9aa4b2; --card:#171a20; --line:#2a2f38; --accent:#6ea0ff; --accent-fg:#0b1020; --danger:#f97066; --ok:#4ade80; --warn:#fdb022; } }
   * { box-sizing: border-box; }
   body { margin:0; font: 15px/1.45 system-ui, -apple-system, Segoe UI, Roboto, sans-serif; background:var(--bg); color:var(--fg); }
   main { max-width: 960px; margin: 0 auto; padding: 24px 16px 64px; }
@@ -24,14 +24,17 @@ export const ADMIN_PAGE = /* html */ `<!doctype html>
   h2 { font-size: 17px; margin: 0 0 12px; }
   p.lede { color: var(--muted); margin: 0 0 24px; }
   section { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 18px; margin-bottom: 20px; }
+  .table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
   table { width:100%; border-collapse: collapse; }
+  td.actions, th:last-child { white-space: nowrap; }
+  td.actions { flex-wrap: nowrap; }
   th, td { text-align:left; padding: 8px 6px; border-bottom: 1px solid var(--line); vertical-align: top; }
   th { color: var(--muted); font-weight: 600; font-size: 13px; }
   code, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
   input, select, button { font: inherit; }
   input, select { padding: 7px 9px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--fg); min-width: 0; }
   button { padding: 7px 12px; border-radius: 6px; border: 1px solid var(--line); background: var(--card); color: var(--fg); cursor: pointer; }
-  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-fg, #fff); }
   button.danger { color: var(--danger); }
   button:disabled { opacity: .5; cursor: default; }
   form.row { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px; align-items: end; margin-top: 12px; }
@@ -72,10 +75,10 @@ export const ADMIN_PAGE = /* html */ `<!doctype html>
       <h2>Client tokens</h2>
       <p class="muted">A token is shown once, when it is created. Revoking it disconnects nothing in flight but refuses the next connection.</p>
       <div id="new-token" class="notice hidden"></div>
-      <table>
+      <div class="table-wrap"><table>
         <thead><tr><th>Name</th><th>Token</th><th>Created</th><th>Last used</th><th></th></tr></thead>
         <tbody id="tokens"></tbody>
-      </table>
+      </table></div>
       <form class="row" id="token-form">
         <label>Name <input id="token-name" placeholder="Front desk tablet" required maxlength="80"></label>
         <button class="primary" type="submit">Create token</button>
@@ -85,10 +88,10 @@ export const ADMIN_PAGE = /* html */ `<!doctype html>
     <section>
       <h2>Printers</h2>
       <p class="muted">Each printer is reached at its host on port 9100. <strong>Status mode</strong> says how the bridge reads the printer's status: <em>snmp</em> for a QL-810W, QL-820NWB or QL-1110NWB (they do not answer status requests on port 9100), <em>tcp</em> for a printer known to answer there, <em>none</em> for fire-and-forget.</p>
-      <table>
+      <div class="table-wrap"><table>
         <thead><tr><th>Name</th><th>Address</th><th>Model</th><th>Status mode</th><th>State</th><th></th></tr></thead>
         <tbody id="printers"></tbody>
-      </table>
+      </table></div>
       <form class="row" id="printer-form">
         <input type="hidden" id="printer-id">
         <label>Name <input id="printer-name" required maxlength="80" placeholder="Shipping desk"></label>

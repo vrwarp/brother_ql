@@ -34,6 +34,7 @@
  */
 
 import {
+  BridgeError,
   BusyError,
   PrinterStatusError,
   StatusTimeoutError,
@@ -147,6 +148,19 @@ const CANCEL_NULL_BYTES = 400;
  * SNMP, where one second of idleness proved reliable.
  */
 const PHASE_IDLE_POLLS = 4;
+
+/**
+ * Whether a failed status request may simply be asked again.
+ *
+ * The bridge reports a fetch that returned nothing (`status-failed`) and a
+ * reply that came too late (`timeout`); both are the weather on a Wi-Fi link,
+ * not a verdict on the job. Every other failure is.
+ */
+function isTransientStatusFailure(error: unknown): boolean {
+  return (
+    error instanceof BridgeError && (error.reason === 'status-failed' || error.reason === 'timeout')
+  );
+}
 
 export interface PrintProgress {
   phase: 'converting' | 'sending' | 'printing';
@@ -561,12 +575,24 @@ export class BrotherQLPrinterCore extends TypedEventTarget<PrinterEvents> {
       if (Date.now() - lastChange > idleMs) {
         throw new StatusTimeoutError(progress.pagesPrinted, idleMs);
       }
-      await this.requestStatus();
-      // The answer, if there is one, rides in ahead of the transport's
-      // acknowledgement of the request, so it is normally already queued. A
-      // poll that yields nothing is a missed poll, bounded by the deadline
-      // above — not a reason to wait out the whole idle budget.
-      const packet = await this.#takePolledPacket();
+      let packet: Uint8Array | null = null;
+      try {
+        await this.requestStatus();
+        // The answer, if there is one, rides in ahead of the transport's
+        // acknowledgement of the request, so it is normally already queued. A
+        // poll that yields nothing is a missed poll, bounded by the deadline
+        // above — not a reason to wait out the whole idle budget.
+        packet = await this.#takePolledPacket();
+      } catch (error) {
+        // One fetch failing is also a missed poll. Over Wi-Fi an SNMP datagram
+        // is lost now and then, and the job's bytes are already with the
+        // printer; failing the job for that would report a label that printed
+        // as an error. The deadline above still catches a status path that
+        // has stopped working altogether. Anything else — the connection
+        // gone, a printer with no status path — is final and goes up.
+        if (!isTransientStatusFailure(error)) throw error;
+        this.diagnostics?.event('printer', 'poll-failed', { error: String(error) });
+      }
       const status = packet ? tryParseStatus(packet) : null;
       if (status) {
         // Polled answers never carry a "completed" type, so #processStatus

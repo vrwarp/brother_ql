@@ -807,13 +807,37 @@ describe('printer over the bridge', () => {
     await expect(attempt).rejects.toBeInstanceOf(DeviceDisconnectedError);
   });
 
-  it('surfaces a failed SNMP fetch while waiting', async () => {
+  it('rides out a transient SNMP failure while waiting, and finishes', async () => {
+    // One lost datagram mid-poll must not fail a job whose bytes are already
+    // with the printer; the next poll simply asks again.
+    const server = bridge({ statusScript: ['fail', POLL_PRINTING, 'fail', POLL_WAITING] });
+    const diagnostics = new DiagnosticsRecorder();
+    const printer = new BrotherQLPrinter(transport(server), { ...printerOptions, diagnostics });
+    await printer.open();
+    const result = await printer.print(image(), { label: '62', statusTimeoutMs: 2000 });
+    expect(result.confirmation).toBe('phase');
+    expect(diagnostics.events().filter((e) => e.name === 'poll-failed')).toHaveLength(2);
+  });
+
+  it('times out when every status fetch fails', async () => {
+    // A status path that has stopped working altogether is caught by the idle
+    // deadline, and reported as the printer going quiet rather than as a
+    // bridge fault — the bridge did answer; the printer did not.
     const server = bridge({ statusScript: ['fail'] });
     const printer = new BrotherQLPrinter(transport(server), printerOptions);
     await printer.open();
-    await expect(printer.print(image(), { label: '62' })).rejects.toMatchObject({
-      reason: 'status-failed',
-    });
+    await expect(
+      printer.print(image(), { label: '62', statusTimeoutMs: 40 }),
+    ).rejects.toBeInstanceOf(StatusTimeoutError);
+  });
+
+  it('still fails a direct status query when the fetch fails', async () => {
+    // Unlike the completion poll, a query has nothing already in flight to
+    // protect, and the caller can simply ask again.
+    const server = bridge({ statusScript: ['fail'] });
+    const printer = new BrotherQLPrinter(transport(server), printerOptions);
+    await printer.open();
+    await expect(printer.queryStatus()).rejects.toMatchObject({ reason: 'status-failed' });
   });
 
   it('reports a fire-and-forget job as sent, not printed', async () => {

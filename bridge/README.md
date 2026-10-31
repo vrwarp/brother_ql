@@ -62,6 +62,33 @@ Served at `/`, it does two things:
   **Probe** opens the printer's port and fetches a status, so you can confirm a
   printer is reachable and loaded before anyone prints to it.
 
+## A walk through the admin page
+
+Sign in with the admin token. A wrong token is refused in place.
+
+![Sign in](docs/screenshots/01-sign-in.png)
+
+The dashboard shows the WebSocket endpoint a page connects to, the client
+tokens, and the printers. Creating a token shows it once, in full; the list
+keeps only its name and prefix afterwards.
+
+![A token, shown once](docs/screenshots/04-token-created.png)
+
+Register a printer by name, host, port and status mode. **Probe** opens its
+port and fetches a status — here a QL-810W answering with 62 mm continuous
+tape loaded, with the raw packet underneath for the client-side decoder.
+
+![Probe of a reachable printer](docs/screenshots/06-probe-reachable.png)
+
+A printer that cannot be reached says so, for both the port and the status
+path, so a wrong address is caught before anyone prints to it.
+
+![Probe of an unreachable printer](docs/screenshots/07-probe-unreachable.png)
+
+The page follows the system colour scheme and fits a phone. The screenshots
+are regenerated with `node scripts/screenshots.mjs` after `npm run build`
+(needs Playwright on the path).
+
 ## Configuration
 
 All via environment variables; the defaults suit the container.
@@ -134,6 +161,7 @@ is defined in `src/protocol.ts` here and mirrored in the library's
 ```bash
 npm ci
 npm run typecheck
-npm test          # ~97 tests: SNMP codec, store, HTTP admin API, the relay end to end
+npm test          # ~100 tests: SNMP codec, store, HTTP admin API, the relay end to end,
+                  # and the relay under a slow, lossy printer connection
 npm run build
 ```
