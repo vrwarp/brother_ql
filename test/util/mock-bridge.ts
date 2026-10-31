@@ -19,8 +19,8 @@ export interface FakeBridgeOptions {
   helloVersion?: number | null;
   /** Refuse the connection: open, then close without a greeting. */
   refuseConnection?: boolean;
-  /** Milliseconds before a frame is acknowledged. Defaults to 0 (next tick). */
-  ackDelayMs?: number;
+  /** Milliseconds before a frame is acknowledged (a function is called per frame, for jitter). Defaults to 0. */
+  ackDelayMs?: number | (() => number);
   /** Swallow frames without acknowledging, to exercise the write watchdog. */
   neverAck?: boolean;
   /** Answer every frame with a `write-failed` error instead of an ack. */
@@ -55,6 +55,21 @@ export class FakeSession {
   /** Bytes "from the printer" to the client. */
   emit(bytes: Uint8Array): void {
     this.socket.serverSend(bytes);
+  }
+
+  /**
+   * Dribble bytes to the client in fragments, as a slow or congested TCP leg
+   * would: each fragment is its own binary frame, spaced `delayMs` apart.
+   */
+  emitFragmented(bytes: Uint8Array, fragmentSize = 1, delayMs = 1): void {
+    let at = 0;
+    const tick = (): void => {
+      if (at >= bytes.length) return;
+      this.emit(bytes.subarray(at, at + fragmentSize));
+      at += fragmentSize;
+      setTimeout(tick, delayMs);
+    };
+    tick();
   }
 
   send(message: BridgeServerMessage): void {
@@ -232,7 +247,7 @@ export class FakeBridgeServer {
       // A tcp printer may answer the data; the ack says only that it was sent.
       if (printer.statusMode === 'tcp') this.options.onPrinterData?.(bytes, session);
       session.send({ type: 'ack', bytes: bytes.length });
-    }, this.options.ackDelayMs ?? 0);
+    }, typeof this.options.ackDelayMs === 'function' ? this.options.ackDelayMs() : (this.options.ackDelayMs ?? 0));
   }
 
   #status(session: FakeSession): void {

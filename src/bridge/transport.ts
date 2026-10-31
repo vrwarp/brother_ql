@@ -245,7 +245,18 @@ class BridgeSocket {
     // Registered before sending, so a reply that arrives in the same tick
     // cannot slip past.
     const pending = this.expect(reply, timeoutMs);
-    this.send(message);
+    try {
+      this.send(message);
+    } catch (error) {
+      // The socket died between registering the waiter and sending — which a
+      // dropped connection can do. The waiter will be rejected by #markGone
+      // when the close lands; attach a consumer now so that rejection is never
+      // an unhandled one, and surface the send failure to the caller instead.
+      void pending.catch(() => {});
+      throw error instanceof BridgeError
+        ? error
+        : new BridgeError('connection', `Could not send to the bridge: ${String(error)}`, error);
+    }
     return pending;
   }
 
@@ -504,7 +515,16 @@ export class BridgeTransport extends TypedEventTarget<TransportEvents> implement
       // arrive unexpected. The frame is a copy: the caller's buffer may be
       // reused while the bridge still holds the message.
       const ack = socket.expect('ack', this.#writeChunkTimeoutMs);
-      socket.sendBinary(new Uint8Array(chunk));
+      try {
+        socket.sendBinary(new Uint8Array(chunk));
+      } catch (error) {
+        // The connection died between registering the waiter and sending.
+        // Consume the waiter so #markGone's rejection is never unhandled, and
+        // report the disconnect.
+        void ack.catch(() => {});
+        this.#diag?.event('bridge', 'write-failed', { reason: 'send-threw' });
+        throw new DeviceDisconnectedError(error);
+      }
       try {
         await ack;
       } catch (error) {
