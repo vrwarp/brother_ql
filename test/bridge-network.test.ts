@@ -22,7 +22,7 @@ import {
   FakeBridgeServer,
   settle,
   type FakeBridgeOptions,
-} from './util/mock-bridge.js';
+} from '../src/testing/mock-bridge.js';
 import { makeStatusPacket, STATUS_COMPLETED, STATUS_PHASE_PRINTING, STATUS_PHASE_WAITING, STATUS_REPLY } from './util/mock-usb.js';
 import { Prng } from './util/prng.js';
 

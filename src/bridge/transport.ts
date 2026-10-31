@@ -83,6 +83,32 @@ export interface BridgeOptions {
   webSocketFactory?: WebSocketFactory;
   /** Receives trace events for debugging. See `diagnostics.ts`. */
   diagnostics?: Tracer;
+  /**
+   * How this client is named in the bridge's log and print log — a kiosk's
+   * name, for instance — so several clients on one token can be told apart.
+   */
+  clientName?: string;
+}
+
+/**
+ * Hold the printer only while labels are flowing.
+ *
+ * By default the transport opens the printer when it opens and holds it until
+ * it closes, which is what a USB printer does and right for one kiosk and one
+ * printer. Two kiosks sharing a printer need the opposite: the bridge locks a
+ * printer to the connection that opened it, so a kiosk that held it all
+ * evening would lock the other out. With a lease the authenticated socket
+ * stays up — that is how the client knows the bridge is reachable and the
+ * printer registered — but the printer is opened at the first write or status
+ * request of a job and released `idleMs` after the job is reported over. A
+ * printer another client holds is retried with backoff for `busyTimeoutMs`
+ * before the attempt fails with `printer-busy`.
+ */
+export interface BridgeLeaseOptions {
+  /** Milliseconds after a job ends before the printer is let go. Defaults to 3000. */
+  idleMs?: number;
+  /** How long to keep retrying a printer another client holds. Defaults to 30 000. */
+  busyTimeoutMs?: number;
 }
 
 export interface BridgeTransportOptions extends BridgeOptions {
@@ -92,7 +118,12 @@ export interface BridgeTransportOptions extends BridgeOptions {
   chunkSize?: number;
   /** How long one frame may wait for its acknowledgement. Defaults to 30 s. */
   writeChunkTimeoutMs?: number;
+  /** Open the printer per job rather than for the connection's life. See {@link BridgeLeaseOptions}. */
+  lease?: BridgeLeaseOptions;
 }
+
+/** The pause before each retry of a busy printer: quick at first, then every two seconds. */
+const BUSY_RETRY_MS = [250, 500, 1000, 2000] as const;
 
 /** The `WebSocket` global, where there is one. */
 export function defaultWebSocketFactory(url: string): MinimalWebSocket {
@@ -122,6 +153,13 @@ interface SocketHandlers {
   onBinary: (bytes: Uint8Array) => void;
   /** The connection is gone, whether the bridge said so or the socket closed. */
   onGone: (reason: string, message?: string) => void;
+  /**
+   * The bridge closed the printer but the socket is still good — a leased
+   * printer let go, or lost under a job. Without this handler a `closed` from
+   * the bridge ends the socket's usefulness, which is right when the printer
+   * was opened for the connection's life.
+   */
+  onPrinterClosed?: (reason: string, message?: string) => void;
 }
 
 /**
@@ -270,6 +308,11 @@ class BridgeSocket {
     this.#ws.close();
   }
 
+  /** Reject whatever reply is being waited for; used when the printer goes under a job. */
+  failPending(error: Error): void {
+    this.#settle((pending) => pending.reject(error));
+  }
+
   #settle(settle: (pending: Pending) => void): void {
     const pending = this.#pending;
     if (!pending) return;
@@ -302,14 +345,30 @@ class BridgeSocket {
       return;
     }
     if (message.type === 'error') {
-      this.#diag?.event('bridge', 'error', { code: message.code, message: message.message });
+      this.#diag?.event('bridge', 'error', { code: message.code, message: message.message, in: message.in });
+      // An error that names the reply it replaces only rejects a waiter for
+      // that reply. A frame refused after its job was already abandoned must
+      // not take down the `open` the next job is waiting on.
+      if (message.in && this.#pending && this.#pending.type !== message.in) {
+        this.#diag?.event('bridge', 'stale-error', { in: message.in, pending: this.#pending.type });
+        return;
+      }
       this.#settle((pending) => pending.reject(new BridgeError(message.code, message.message)));
       return;
     }
     if (message.type === 'closed') {
       this.#diag?.event('bridge', 'closed', { reason: message.reason, message: message.message });
-      // The bridge closing the printer session is the end of this socket's
-      // usefulness either way; the handler decides whether it was expected.
+      // Our own release, being waited for.
+      if (this.#pending?.type === 'closed') {
+        this.#settle((pending) => pending.resolve(message));
+        return;
+      }
+      // A leased printer closing leaves the socket good; otherwise the printer
+      // session was this socket's whole purpose.
+      if (this.#handlers.onPrinterClosed) {
+        this.#handlers.onPrinterClosed(message.reason, message.message);
+        return;
+      }
       this.#markGone(message.reason, message.message);
       return;
     }
@@ -349,7 +408,7 @@ export async function listBridgePrinters(options: BridgeOptions): Promise<Bridge
   const requestTimeoutMs = options.requestTimeoutMs ?? 10_000;
   const socket = await BridgeSocket.connect(options, { onBinary: () => {}, onGone: () => {} });
   try {
-    const reply = await socket.request({ type: 'auth', token: options.token }, 'auth-ok', requestTimeoutMs);
+    const reply = await socket.request(authMessage(options), 'auth-ok', requestTimeoutMs);
     return reply.printers;
   } finally {
     socket.close();
@@ -357,6 +416,12 @@ export async function listBridgePrinters(options: BridgeOptions): Promise<Bridge
 }
 
 type TransportState = 'closed' | 'open' | 'dead';
+
+function authMessage(options: BridgeOptions): BridgeClientMessage {
+  return options.clientName
+    ? { type: 'auth', token: options.token, client: options.clientName }
+    : { type: 'auth', token: options.token };
+}
 
 export class BridgeTransport extends TypedEventTarget<TransportEvents> implements Transport {
   /** 32 byte status packets received from the printer, reframed. */
@@ -374,6 +439,15 @@ export class BridgeTransport extends TypedEventTarget<TransportEvents> implement
   #printer: BridgePrinterInfo | null = null;
   #openPromise: Promise<void> | null = null;
 
+  /* The lease, when there is one: see BridgeLeaseOptions. */
+  readonly #lease: Required<BridgeLeaseOptions> | null;
+  /** Whether the bridge currently has the printer open for this connection. */
+  #held = false;
+  #acquiring: Promise<void> | null = null;
+  #releaseTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Between beginJob and endJob, so a status poll mid-job does not let go. */
+  #jobInFlight = false;
+
   constructor(options: BridgeTransportOptions) {
     super();
     this.#options = options;
@@ -389,10 +463,28 @@ export class BridgeTransport extends TypedEventTarget<TransportEvents> implement
         `writeChunkTimeoutMs must be a positive number, got ${this.#writeChunkTimeoutMs}.`,
       );
     }
+    this.#lease = options.lease
+      ? { idleMs: options.lease.idleMs ?? 3000, busyTimeoutMs: options.lease.busyTimeoutMs ?? 30_000 }
+      : null;
+    if (this.#lease) {
+      if (!Number.isFinite(this.#lease.idleMs) || this.#lease.idleMs < 0) {
+        throw new RangeError(`lease.idleMs must be a non-negative number, got ${this.#lease.idleMs}.`);
+      }
+      if (!Number.isFinite(this.#lease.busyTimeoutMs) || this.#lease.busyTimeoutMs < 0) {
+        throw new RangeError(
+          `lease.busyTimeoutMs must be a non-negative number, got ${this.#lease.busyTimeoutMs}.`,
+        );
+      }
+    }
   }
 
   get opened(): boolean {
     return this.#state === 'open';
+  }
+
+  /** Whether the printer is open for this connection right now. Always true while open without a lease. */
+  get holding(): boolean {
+    return this.#state === 'open' && this.#held;
   }
 
   /** The printer as the bridge described it when it was opened. */
@@ -442,21 +534,32 @@ export class BridgeTransport extends TypedEventTarget<TransportEvents> implement
     holder.socket = await BridgeSocket.connect(this.#options, {
       onBinary: (bytes) => this.#onBinary(bytes),
       onGone: (reason, message) => this.#onGone(holder.socket, reason, message),
+      ...(this.#lease
+        ? { onPrinterClosed: (reason, message) => this.#onPrinterClosed(holder.socket, reason, message) }
+        : {}),
     });
     const socket = holder.socket;
     try {
-      await socket.request(
-        { type: 'auth', token: this.#options.token },
-        'auth-ok',
-        this.#requestTimeoutMs,
-      );
+      const authed = await socket.request(authMessage(this.#options), 'auth-ok', this.#requestTimeoutMs);
       this.#diag?.event('bridge', 'auth', {});
-      const opened = await socket.request(
-        { type: 'open', printerId: this.#options.printerId },
-        'opened',
-        this.#requestTimeoutMs,
-      );
-      this.#printer = opened.printer;
+      if (this.#lease) {
+        // Leased: the printer is opened per job. Knowing it is registered, and
+        // how its status is read, is what "open" means here.
+        const listed = authed.printers.find((printer) => printer.id === this.#options.printerId);
+        if (!listed) {
+          throw new BridgeError('unknown-printer', `The bridge lists no printer with id ${this.#options.printerId}.`);
+        }
+        this.#printer = listed;
+        this.#held = false;
+      } else {
+        const opened = await socket.request(
+          { type: 'open', printerId: this.#options.printerId },
+          'opened',
+          this.#requestTimeoutMs,
+        );
+        this.#printer = opened.printer;
+        this.#held = true;
+      }
     } catch (error) {
       socket.close();
       throw error;
@@ -499,6 +602,101 @@ export class BridgeTransport extends TypedEventTarget<TransportEvents> implement
   }
 
   /**
+   * Make sure the printer is open for this connection, taking the lease if
+   * there is one. Without a lease the printer has been open since `open()`.
+   */
+  async #acquire(socket: BridgeSocket): Promise<void> {
+    if (!this.#lease || this.#held) return;
+    if (this.#acquiring) return this.#acquiring;
+    this.#clearRelease();
+    const lease = this.#lease;
+    this.#acquiring = (async () => {
+      const started = Date.now();
+      for (let attempt = 0; ; attempt++) {
+        try {
+          const opened = await socket.request(
+            { type: 'open', printerId: this.#options.printerId },
+            'opened',
+            this.#requestTimeoutMs,
+          );
+          this.#printer = opened.printer;
+          this.#held = true;
+          // A fresh hold is a fresh conversation with the printer.
+          this.statusQueue.reset();
+          this.#framer.reset();
+          this.#diag?.event('bridge', 'lease-acquired', { attempt, ms: Date.now() - started });
+          return;
+        } catch (error) {
+          const busy = error instanceof BridgeError && error.reason === 'printer-busy';
+          const waited = Date.now() - started;
+          if (!busy || waited >= lease.busyTimeoutMs) throw error;
+          const delay = Math.min(
+            BUSY_RETRY_MS[Math.min(attempt, BUSY_RETRY_MS.length - 1)] ?? 2000,
+            Math.max(0, lease.busyTimeoutMs - waited),
+          );
+          this.#diag?.event('bridge', 'lease-busy', { attempt, waitedMs: waited, retryInMs: delay });
+          await new Promise<void>((resolve) => setTimeout(resolve, delay));
+          if (this.#socket !== socket || this.#state !== 'open') throw new DeviceDisconnectedError();
+        }
+      }
+    })();
+    try {
+      await this.#acquiring;
+    } finally {
+      this.#acquiring = null;
+    }
+  }
+
+  #clearRelease(): void {
+    if (this.#releaseTimer) clearTimeout(this.#releaseTimer);
+    this.#releaseTimer = null;
+  }
+
+  /** Let the printer go once nothing has needed it for the lease's idle time. */
+  #scheduleRelease(): void {
+    if (!this.#lease || !this.#held) return;
+    this.#clearRelease();
+    this.#releaseTimer = setTimeout(() => {
+      this.#releaseTimer = null;
+      void this.#release();
+    }, this.#lease.idleMs);
+  }
+
+  async #release(): Promise<void> {
+    const socket = this.#socket;
+    if (!this.#held || !socket || socket.gone || this.#state !== 'open') return;
+    if (this.#jobInFlight) return; // a job started while the timer was pending
+    this.#held = false;
+    this.#diag?.event('bridge', 'lease-released', {});
+    try {
+      await socket.request({ type: 'close' }, 'closed', this.#requestTimeoutMs);
+    } catch (error) {
+      // A reply already awaited means a job just began and will re-acquire;
+      // anything else is the socket's problem and reported through its own
+      // path. Either way the printer is let go of as far as this side knows.
+      this.#diag?.event('bridge', 'lease-release-failed', { error: String(error) });
+    }
+  }
+
+  /** A leased printer closed on the bridge's side while the socket lives on. */
+  #onPrinterClosed(socket: BridgeSocket | undefined, reason: string, message?: string): void {
+    if (!socket || this.#socket !== socket) return;
+    this.#clearRelease();
+    const wasHeld = this.#held;
+    this.#held = false;
+    this.#diag?.event('bridge', 'printer-closed', { reason, message, wasHeld });
+    if (reason === 'client' || !wasHeld) return;
+    // Lost under us: whoever is waiting on it — a frame's acknowledgement, a
+    // completion poll — learns now rather than at a timeout. The next job
+    // takes the lease afresh.
+    const error = new DeviceDisconnectedError(
+      new Error(message ?? `The bridge closed the printer (${reason}).`),
+    );
+    socket.failPending(error);
+    this.statusQueue.fail(error);
+  }
+
+  /**
    * Write a job in frames, each acknowledged by the bridge once its bytes
    * reached the printer's socket. Same shape as the USB write: progress per
    * chunk, and a hook between chunks that can abandon the rest.
@@ -509,6 +707,10 @@ export class BridgeTransport extends TypedEventTarget<TransportEvents> implement
     betweenChunks?: () => void | Promise<void>,
   ): Promise<void> {
     const socket = this.#requireSocket();
+    // Only a lease that is not held needs an await here: without one the
+    // first chunk is copied before this call returns to the caller, which a
+    // caller reusing its buffer straight after `write()` relies on.
+    if (this.#lease && !this.#held) await this.#acquire(socket);
     this.#diag?.event('bridge', 'write-start', { bytes: data.length });
 
     let sent = 0;
@@ -573,7 +775,27 @@ export class BridgeTransport extends TypedEventTarget<TransportEvents> implement
    * changes nothing about the job.
    */
   beginJob(job: JobAnnouncement): void {
-    this.#tell({ type: 'job', pages: job.pages, ...(job.label ? { label: job.label } : {}) });
+    const announce: BridgeClientMessage = {
+      type: 'job',
+      pages: job.pages,
+      ...(job.label ? { label: job.label } : {}),
+    };
+    this.#jobInFlight = true;
+    this.#clearRelease();
+    const socket = this.#socket;
+    if (this.#lease && socket && !this.#held) {
+      // The bridge files a job against an open printer, so take the lease
+      // first. The write that follows awaits the same acquisition, and its
+      // continuation is queued behind this one, so the announcement still goes
+      // out ahead of the first frame.
+      void this.#acquire(socket)
+        .then(() => this.#tell(announce))
+        .catch(() => {
+          // Best effort by contract; the write reports the failure properly.
+        });
+      return;
+    }
+    this.#tell(announce);
   }
 
   /** Tell the bridge how the announced job ended. Fire and forget. */
@@ -584,6 +806,8 @@ export class BridgeTransport extends TypedEventTarget<TransportEvents> implement
       confirmation: report.confirmation,
       ...(report.error ? { error: report.error } : {}),
     });
+    this.#jobInFlight = false;
+    this.#scheduleRelease();
   }
 
   #tell(message: BridgeClientMessage): void {
@@ -607,8 +831,16 @@ export class BridgeTransport extends TypedEventTarget<TransportEvents> implement
    */
   async requestStatus(): Promise<void> {
     const socket = this.#requireSocket();
+    await this.#acquire(socket);
     this.#diag?.event('bridge', 'status-request', {});
-    await socket.request({ type: 'status' }, 'status-sent', this.#requestTimeoutMs);
+    try {
+      await socket.request({ type: 'status' }, 'status-sent', this.#requestTimeoutMs);
+    } finally {
+      // A status read outside a job — the set-up screen asking what is loaded
+      // — should not keep a shared printer; inside a job the lease is the
+      // job's and ends with it.
+      if (!this.#jobInFlight) this.#scheduleRelease();
+    }
   }
 
   /** Tell the bridge to release the printer, and close the WebSocket. */
@@ -616,14 +848,18 @@ export class BridgeTransport extends TypedEventTarget<TransportEvents> implement
     if (this.#openPromise) await this.#openPromise.catch(() => {});
     const socket = this.#socket;
     const wasOpen = this.#state === 'open';
+    const wasHeld = this.#held;
+    this.#clearRelease();
     this.#state = 'closed';
     this.#socket = null;
+    this.#held = false;
+    this.#jobInFlight = false;
     this.#diag?.event('bridge', 'close', { wasOpen });
     if (socket && !socket.gone) {
       // Best effort: the bridge releases the printer when the socket closes
       // anyway, so a failure to say goodbye first changes nothing.
       try {
-        if (wasOpen) socket.send({ type: 'close' });
+        if (wasOpen && wasHeld) socket.send({ type: 'close' });
       } catch {
         // The socket may already be closing underneath us.
       }

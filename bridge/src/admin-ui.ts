@@ -75,10 +75,10 @@ export const ADMIN_PAGE = /* html */ `<!doctype html>
       <h2>Recent prints</h2>
       <p class="muted" id="totals">No prints yet.</p>
       <div class="table-wrap"><table>
-        <thead><tr><th>When</th><th>Printer</th><th>Token</th><th>Labels</th><th>Size</th><th>Outcome</th><th>Faults</th></tr></thead>
+        <thead><tr><th>When</th><th>Printer</th><th>Client</th><th>Labels</th><th>Size</th><th>Outcome</th><th>Faults</th></tr></thead>
         <tbody id="jobs"></tbody>
       </table></div>
-      <p class="muted">The last few jobs, newest first. <em>Labels</em> is what the client reported printing, or the pages it announced if it did not report; a tick means the printer itself confirmed them. <em>Faults</em> counts status packets with an error flag seen during the job. The page refreshes this every few seconds.</p>
+      <p class="muted">The last few jobs, newest first. <em>Client</em> is the token's name and, after the dot, what the client called itself — a kiosk's name — if it said. <em>Labels</em> is what the client reported printing, or the pages it announced if it did not report; a tick means the printer itself confirmed them. <em>Faults</em> counts status packets with an error flag seen during the job. The page refreshes this every few seconds.</p>
     </section>
 
     <section>
@@ -197,7 +197,8 @@ export const ADMIN_PAGE = /* html */ `<!doctype html>
         : j.completions ? num(j.completions) + ' ✓' : j.pages !== null && j.pages !== undefined ? num(j.pages) : '—';
       const faults = j.faults && j.faults.length ? '<span class="bad">' + j.faults.length + '</span>' : '<span class="muted">0</span>';
       const title = esc(j.message || '') + (j.label ? ' label ' + esc(j.label) : '') + ' session ' + esc(j.session);
-      return '<tr title="' + title + '"><td>' + esc(when(j.finishedAt)) + '</td><td>' + esc(j.printerName) + '</td><td>' + esc(j.token) + '</td><td>' + labels + '</td><td>' + esc(size(j.bytes)) + ' <span class="muted">/ ' + num(j.frames) + ' frames</span></td>' +
+      const who = esc(j.token) + (j.client ? ' <span class="muted">· ' + esc(j.client) + '</span>' : '');
+      return '<tr title="' + title + '"><td>' + esc(when(j.finishedAt)) + '</td><td>' + esc(j.printerName) + '</td><td>' + who + '</td><td>' + labels + '</td><td>' + esc(size(j.bytes)) + ' <span class="muted">/ ' + num(j.frames) + ' frames</span></td>' +
         '<td><span class="' + cls + '">' + esc(word) + '</span>' + (j.message ? ' <span class="muted">' + esc(j.message) + '</span>' : '') + '</td><td>' + faults + '</td></tr>';
     }).join('') : '<tr><td colspan="7" class="muted">Nothing has been printed through the bridge yet.</td></tr>';
     const all = Object.values(stats || {});

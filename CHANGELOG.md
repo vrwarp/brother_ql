@@ -30,6 +30,14 @@ Changes to the Python package are not tracked here.
   **Download diagnostics** button bundles with the (secret-free) configuration
   for a bug report. Bridge protocol version 2 adds the `job` and `job-done`
   messages the log is built from.
+- **A lease for shared printers.** `BridgeTransport` takes a `lease` option that
+  opens the printer per job instead of for the connection's life, retrying a
+  printer another client holds for `busyTimeoutMs` and letting go `idleMs` after
+  the job ends — what two kiosks on one printer need. `clientName` names the
+  connection in the bridge's log and print log. Errors from the bridge now name
+  the reply they stand in for, so a late refusal of an abandoned frame cannot be
+  taken for the answer to the next request. The scripted fake bridge is
+  published as `@vrwarp/brother-ql-webusb/testing`.
 - **A test label from the bridge's admin page.** Each registered printer has a
   *Test label* button: the page rasterises a test card with the library in the
   browser, mints itself a ten-minute token, and prints through the bridge as an

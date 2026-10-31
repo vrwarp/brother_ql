@@ -45,6 +45,10 @@
       "types": "./dist/models.d.ts",
       "import": "./dist/models.js"
     },
+    "./testing": {
+      "types": "./dist/testing.d.ts",
+      "import": "./dist/testing.js"
+    },
     "./package.json": "./package.json"
   },
   "types": "./dist/index.d.ts",

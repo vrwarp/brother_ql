@@ -106,9 +106,10 @@ are regenerated with `node scripts/screenshots.mjs` after `npm run build`
 ## The print log and statistics
 
 The dashboard's **Recent prints** card lists the last few jobs (five by
-default, `RECENT_JOBS`), newest first: when, which printer, which token, how
-many labels, how big, how it ended, and whether the printer reported a fault
-while it ran. The printers table carries all-time counters per printer — jobs,
+default, `RECENT_JOBS`), newest first: when, which printer, which client (the
+token's name and, if the client gave one, its own — a kiosk's name), how many
+labels, how big, how it ended, and whether the printer reported a fault while
+it ran. The printers table carries all-time counters per printer — jobs,
 labels (with how many the printer itself confirmed) and jobs with faults — and
 the card's first line sums them.
 
