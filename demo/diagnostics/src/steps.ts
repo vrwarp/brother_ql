@@ -32,6 +32,7 @@ import {
   type Model,
   type PrinterStatus,
   type RawImage,
+  type UsbTransport,
 } from '@vrwarp/brother-ql-webusb';
 
 import { collectEnvironment, snapshotDescriptors } from './collect.js';
@@ -598,7 +599,10 @@ export function buildSteps(harness: Harness): StepDefinition[] {
         const printer = await harness.ensureConnected();
         const device = harness.rawDevice as USBDevice;
         session.setSnapshot('descriptorsPostOpen', snapshotDescriptors(device));
-        const interfaceNumber = printer.transport.interfaceNumber;
+        // The diagnostics wizard only ever pairs over USB, so the transport
+        // is the USB one; the printer's type widened to any transport when the
+        // bridge arrived.
+        const interfaceNumber = (printer.transport as UsbTransport).interfaceNumber;
         ctx.log(`Claimed interface ${interfaceNumber ?? '?'} and started reading.`);
         return { interfaceNumber };
       },

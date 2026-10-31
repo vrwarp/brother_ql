@@ -15,12 +15,20 @@
 
 import { convert, expectedImageSize, type ConvertOptions } from './convert.js';
 import type { RawImage } from './image/raw-image.js';
-import { BrotherQLPrinterCore, type PrintProgress, type PrintResult } from './printer-core.js';
+import {
+  BrotherQLPrinterCore,
+  describeError,
+  type JobProgress,
+  type PrintProgress,
+  type PrintResult,
+} from './printer-core.js';
+import type { JobReport } from './transport.js';
 import { BrotherQLRaster } from './raster.js';
 
 export {
   BrotherQLPrinterCore,
   type JobProgress,
+  type PrintConfirmation,
   type PrintProgress,
   type PrintResult,
   type PrinterEvents,
@@ -113,6 +121,9 @@ export class BrotherQLPrinter extends BrotherQLPrinterCore {
   ): Promise<PrintResult> {
     const model = this.requireModel();
     this.acquire();
+    const report: JobReport = { pagesPrinted: 0, confirmation: 'none' };
+    let announced = false;
+    let job: JobProgress | undefined;
 
     try {
       const list = Array.isArray(sources)
@@ -176,6 +187,8 @@ export class BrotherQLPrinter extends BrotherQLPrinterCore {
       // promptly when the printer reports an error, instead of pushing every
       // remaining byte at a printer that cannot print them.
       const progress = this.startJob(pageCount);
+      job = progress;
+      announced = this.announceJob({ pages: pageCount, label: options.label });
       const onPageDone = (pagesPrinted: number): void =>
         onProgress?.({
           phase: 'printing',
@@ -195,15 +208,28 @@ export class BrotherQLPrinter extends BrotherQLPrinterCore {
             pagesCompleted: progress.pagesPrinted,
             pageCount,
           }),
-        () => this.drainForErrors(progress, onPageDone),
+        this.jobChunkHook(progress, onPageDone),
       );
 
       if (options.nonBlocking) {
-        return { pagesPrinted: progress.pagesPrinted, lastStatus: progress.lastStatus };
+        report.pagesPrinted = progress.pagesPrinted;
+        return {
+          pagesPrinted: progress.pagesPrinted,
+          lastStatus: progress.lastStatus,
+          confirmation: 'none',
+        };
       }
 
-      return await this.awaitCompletion(progress, idleMs, onPageDone);
+      const result = await this.awaitCompletion(progress, idleMs, onPageDone);
+      report.pagesPrinted = result.pagesPrinted;
+      report.confirmation = result.confirmation;
+      return result;
+    } catch (error) {
+      if (job) report.pagesPrinted = job.pagesPrinted;
+      report.error = describeError(error);
+      throw error;
     } finally {
+      this.reportJob(announced, report);
       this.release();
     }
   }

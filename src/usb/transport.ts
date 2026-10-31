@@ -25,7 +25,8 @@ import {
 import type { Tracer } from '../diagnostics.js';
 import { hexFormat } from '../internal/bytes.js';
 import { TypedEventTarget } from '../internal/events.js';
-import { STATUS_HEADER, STATUS_PACKET_LENGTH } from '../status.js';
+import { STATUS_PACKET_LENGTH } from '../status.js';
+import { StatusFramer, type CompletionMode, type Transport } from '../transport.js';
 import { AsyncQueue } from './async-queue.js';
 
 /** USB interface class for printers, which is what Brother QL devices expose. */
@@ -131,10 +132,12 @@ function claimAdvice(platform: PlatformHint): string {
   }
 }
 
-export class UsbTransport extends TypedEventTarget<TransportEvents> {
+export class UsbTransport extends TypedEventTarget<TransportEvents> implements Transport {
   readonly device: MinimalUsbDevice;
   /** 32 byte status packets received from the printer. */
   readonly statusQueue = new AsyncQueue<Uint8Array>();
+  /** A USB printer volunteers per-page completions and phase changes. */
+  readonly completion: CompletionMode = 'pages';
 
   readonly #chunkSize: number;
   readonly #writeChunkTimeoutMs: number;
@@ -145,7 +148,7 @@ export class UsbTransport extends TypedEventTarget<TransportEvents> {
   #interfaceNumber: number | null = null;
   #endpointIn: USBEndpoint | null = null;
   #endpointOut: USBEndpoint | null = null;
-  #partial = new Uint8Array(0);
+  readonly #framer = new StatusFramer();
   /** Resolves when the reader loop has stopped. Already resolved while closed. */
   #readerDone: Promise<void> = Promise.resolve();
   #openPromise: Promise<void> | null = null;
@@ -237,7 +240,7 @@ export class UsbTransport extends TypedEventTarget<TransportEvents> {
 
   async #openSteps(): Promise<void> {
     this.statusQueue.reset();
-    this.#partial = new Uint8Array(0);
+    this.#framer.reset();
 
     this.#diag?.event('transport', 'open-start', {
       vendorId: this.device.vendorId,
@@ -403,40 +406,16 @@ export class UsbTransport extends TypedEventTarget<TransportEvents> {
         result.data.byteOffset,
         result.data.byteLength,
       );
-      let buffer: Uint8Array;
-      // Stryker disable next-line ConditionalExpression: taking the general
-      // path with an empty partial buffer copies `incoming` into a buffer of
-      // its own length, which holds the same bytes. This only avoids the copy.
-      if (this.#partial.length === 0) {
-        buffer = incoming;
-      } else {
-        buffer = new Uint8Array(this.#partial.length + incoming.length);
-        buffer.set(this.#partial, 0);
-        buffer.set(incoming, this.#partial.length);
-      }
-
-      let offset = 0;
-      let dropped = 0;
-      while (buffer.length - offset >= STATUS_PACKET_LENGTH) {
-        if (
-          buffer[offset] === STATUS_HEADER[0] &&
-          buffer[offset + 1] === STATUS_HEADER[1] &&
-          buffer[offset + 2] === STATUS_HEADER[2]
-        ) {
-          const packet = buffer.slice(offset, offset + STATUS_PACKET_LENGTH);
-          this.#diag?.event('transport', 'status-packet', { hex: hexFormat(packet) });
-          this.statusQueue.push(packet);
-          offset += STATUS_PACKET_LENGTH;
-        } else {
-          // Out of frame: drop one byte and look for the header again.
-          offset += 1;
-          dropped += 1;
-        }
+      // Reassembly and resynchronisation live in the framer, which the bridge
+      // transport shares: see transport.ts.
+      const { packets, dropped } = this.#framer.push(incoming);
+      for (const packet of packets) {
+        this.#diag?.event('transport', 'status-packet', { hex: hexFormat(packet) });
+        this.statusQueue.push(packet);
       }
       if (dropped > 0) {
         this.#diag?.event('transport', 'resync', { droppedBytes: dropped });
       }
-      this.#partial = buffer.slice(offset);
     }
   }
 
@@ -477,7 +456,7 @@ export class UsbTransport extends TypedEventTarget<TransportEvents> {
   async write(
     data: Uint8Array,
     onProgress?: (bytesSent: number, bytesTotal: number) => void,
-    betweenChunks?: () => void,
+    betweenChunks?: () => void | Promise<void>,
   ): Promise<void> {
     if (this.#state !== 'open') {
       throw new DeviceDisconnectedError();
@@ -493,7 +472,8 @@ export class UsbTransport extends TypedEventTarget<TransportEvents> {
 
     let sent = 0;
     while (sent < data.length) {
-      betweenChunks?.();
+      const pause = betweenChunks?.();
+      if (pause) await pause;
 
       const chunk = data.subarray(sent, Math.min(sent + this.#chunkSize, data.length));
       const chunkStarted = Date.now();

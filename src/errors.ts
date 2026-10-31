@@ -228,6 +228,47 @@ export class UnsupportedCommandError extends BrotherQLError {
   }
 }
 
+/**
+ * Why a bridge connection failed.
+ *
+ * Codes the bridge itself sends are passed through unchanged (see
+ * `BridgeErrorCode` in `bridge/protocol.ts`). The client adds a few of its own
+ * for failures the bridge never got to see: the WebSocket could not be opened,
+ * the bridge spoke a protocol version this client does not know, or a reply
+ * never came.
+ */
+export type BridgeErrorReason =
+  | 'connection'
+  | 'protocol'
+  | 'timeout'
+  | 'unauthorized'
+  | 'bad-request'
+  | 'unknown-printer'
+  | 'printer-busy'
+  | 'connect-failed'
+  | 'not-open'
+  | 'already-open'
+  | 'status-unavailable'
+  | 'status-failed'
+  | 'write-failed'
+  | 'unknown';
+
+/**
+ * The bridge refused or could not carry out a request.
+ *
+ * Distinct from {@link DeviceDisconnectedError}, which is what a bridge
+ * connection that *was* working turns into when it goes away.
+ */
+export class BridgeError extends BrotherQLError {
+  readonly code = 'bridge';
+  readonly reason: BridgeErrorReason;
+
+  constructor(reason: BridgeErrorReason, message: string, cause?: unknown) {
+    super(message, { cause });
+    this.reason = reason;
+  }
+}
+
 /** Another operation is already running on this printer. */
 export class BusyError extends BrotherQLError {
   readonly code = 'busy';
