@@ -36,7 +36,7 @@ import {
   MockWebSocket,
   settle,
   type FakeBridgeOptions,
-} from './util/mock-bridge.js';
+} from '../src/testing/mock-bridge.js';
 import {
   MockUsbDevice,
   STATUS_COMPLETED,
@@ -1062,5 +1062,134 @@ describe('mid-job status polling on a polled transport', () => {
   it('validates the interval', () => {
     const t = transport(bridge());
     expect(() => new BrotherQLPrinterCore(t, { midJobStatusIntervalMs: -5 })).toThrow(RangeError);
+  });
+});
+
+describe('the lease: holding the printer only while labels flow', () => {
+  const leased = (server: FakeBridgeServer, extra: Record<string, unknown> = {}) =>
+    transport(server, 'ql810w', { lease: { idleMs: 30, busyTimeoutMs: 400 }, ...extra });
+
+  it('opens without taking the printer, and names the client', async () => {
+    const server = bridge();
+    const t = leased(server, { clientName: 'Nursery kiosk' });
+    await t.open();
+    expect(t.opened).toBe(true);
+    expect(t.holding).toBe(false);
+    expect(t.printer?.id).toBe('ql810w');
+    expect(t.completion).toBe('phase'); // known from the list, before any open
+    expect(server.last.printer).toBeNull();
+    expect(server.last.client).toBe('Nursery kiosk');
+    expect(server.printers.find((p) => p.id === 'ql810w')?.busy).toBe(false);
+    await t.close();
+  });
+
+  it('refuses at open a printer the bridge does not list', async () => {
+    const server = bridge();
+    await expect(leased(server, { printerId: 'nope' }).open()).rejects.toMatchObject({
+      reason: 'unknown-printer',
+    });
+  });
+
+  it('takes the printer for a job and lets it go once the job is over and idle', async () => {
+    const server = bridge({ statusScript: [POLL_WAITING] });
+    const t = leased(server);
+    const printer = new BrotherQLPrinter(t, { model: 'QL-810W', statusPollIntervalMs: 1 });
+    await printer.open();
+    await printer.print(image(), { label: '62' });
+    await settle();
+    // The announcement went out before the first frame, on the acquired printer.
+    expect(server.last.jobs[0]).toEqual({ type: 'job', pages: 1, label: '62' });
+    expect(server.last.messages.findIndex((m) => m.type === 'open')).toBeLessThan(
+      server.last.messages.findIndex((m) => m.type === 'job'),
+    );
+    expect(t.holding).toBe(true);
+    await new Promise((r) => setTimeout(r, 60));
+    await settle();
+    expect(t.holding).toBe(false);
+    expect(t.opened).toBe(true);
+    expect(server.last.printer).toBeNull();
+    expect(server.last.messages.at(-1)).toEqual({ type: 'close' });
+    // And it comes back for the next one.
+    await printer.print(image(), { label: '62' });
+    expect(t.holding).toBe(true);
+    await printer.close();
+  });
+
+  it('lets two clients share one printer, the second waiting for the first', async () => {
+    const server = bridge({ statusScript: [POLL_WAITING], ackDelayMs: 2 });
+    const a = new BrotherQLPrinter(leased(server, { clientName: 'A' }), { model: 'QL-810W', statusPollIntervalMs: 1 });
+    const b = new BrotherQLPrinter(leased(server, { clientName: 'B' }), { model: 'QL-810W', statusPollIntervalMs: 1 });
+    await a.open();
+    await b.open();
+    const first = a.print(image(696, 400), { label: '62' });
+    await settle(3); // A holds the printer now
+    const second = b.print(image(), { label: '62' });
+    const [ra, rb] = await Promise.all([first, second]);
+    expect(ra.confirmation).toBe('phase');
+    expect(rb.confirmation).toBe('phase');
+    // B printed after A let go, not interleaved.
+    const sessions = server.sessions;
+    expect(sessions[0]?.client).toBe('A');
+    expect(sessions[1]?.client).toBe('B');
+    expect(sessions[1]?.written.length).toBeGreaterThan(0);
+    await a.close();
+    await b.close();
+  });
+
+  it('gives up on a printer that stays busy past the limit', async () => {
+    const server = bridge();
+    const holder = transport(server, 'ql810w'); // no lease: holds for good
+    await holder.open();
+    const t = leased(server, { lease: { idleMs: 30, busyTimeoutMs: 120 } });
+    await t.open();
+    const started = Date.now();
+    await expect(t.write(new Uint8Array(4))).rejects.toMatchObject({ reason: 'printer-busy' });
+    expect(Date.now() - started).toBeGreaterThanOrEqual(100);
+    expect(t.opened).toBe(true); // the connection is fine; only the job failed
+    await holder.close();
+    await t.close();
+  });
+
+  it('survives the printer being lost under a job, and takes it again next time', async () => {
+    const server = bridge({ neverAck: true });
+    const t = leased(server);
+    await t.open();
+    const disconnected = vi.fn();
+    t.on('disconnect', disconnected);
+    const attempt = t.write(new Uint8Array(4));
+    await settle(2);
+    server.printerWentAway(server.last, 'reset');
+    await expect(attempt).rejects.toBeInstanceOf(DeviceDisconnectedError);
+    // The socket is still good: no disconnect, still open, nothing held.
+    expect(disconnected).not.toHaveBeenCalled();
+    expect(t.opened).toBe(true);
+    expect(t.holding).toBe(false);
+    server.options.neverAck = false;
+    await t.write(new Uint8Array(4));
+    expect(t.holding).toBe(true);
+    // The frame that arrived after the printer was lost was refused, so only
+    // the one sent on the fresh lease reached it.
+    expect(server.last.written).toHaveLength(1);
+    expect(server.last.messages.filter((m) => m.type === 'open')).toHaveLength(2);
+    await t.close();
+  });
+
+  it('a status read outside a job takes the printer briefly', async () => {
+    const server = bridge({ statusScript: [POLL_WAITING] });
+    const printer = new BrotherQLPrinter(leased(server), { model: 'QL-810W' });
+    await printer.open();
+    const status = await printer.queryStatus();
+    expect(status.mediaWidthMm).toBe(62);
+    expect((printer.transport as BridgeTransport).holding).toBe(true);
+    await new Promise((r) => setTimeout(r, 60));
+    await settle();
+    expect((printer.transport as BridgeTransport).holding).toBe(false);
+    await printer.close();
+  });
+
+  it('validates the lease numbers', () => {
+    const base = { url: 'ws://x', token: 't', printerId: 'p' };
+    expect(() => new BridgeTransport({ ...base, lease: { idleMs: -1 } })).toThrow(RangeError);
+    expect(() => new BridgeTransport({ ...base, lease: { busyTimeoutMs: NaN } })).toThrow(RangeError);
   });
 });

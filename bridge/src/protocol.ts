@@ -50,7 +50,8 @@ export type BridgeErrorCode =
 export type JobConfirmation = 'pages' | 'phase' | 'none';
 
 export type BridgeClientMessage =
-  | { type: 'auth'; token: string }
+  /** `client` names the connection for the bridge's log — a kiosk's name, say. */
+  | { type: 'auth'; token: string; client?: string }
   | { type: 'list' }
   | { type: 'open'; printerId: string }
   | { type: 'status' }
@@ -72,7 +73,12 @@ export type BridgeServerMessage =
   | { type: 'ack'; bytes: number }
   | { type: 'status-sent' }
   | { type: 'closed'; reason: 'client' | 'printer' | 'error'; message?: string }
-  | { type: 'error'; code: BridgeErrorCode; message: string };
+  /**
+   * `in` names the reply this error stands in for (`ack`, `opened`,
+   * `status-sent`, `closed`), so a client can tell a late error for a frame
+   * it has already given up on from the answer to what it is asking now.
+   */
+  | { type: 'error'; code: BridgeErrorCode; message: string; in?: string };
 
 /** Parse a client's text frame; null for anything that is not a message. */
 export function parseClientMessage(text: string): BridgeClientMessage | null {
@@ -85,8 +91,14 @@ export function parseClientMessage(text: string): BridgeClientMessage | null {
   if (typeof value !== 'object' || value === null) return null;
   const message = value as Record<string, unknown>;
   switch (message.type) {
-    case 'auth':
-      return typeof message.token === 'string' ? { type: 'auth', token: message.token } : null;
+    case 'auth': {
+      if (typeof message.token !== 'string') return null;
+      const auth: BridgeClientMessage = { type: 'auth', token: message.token };
+      if (typeof message.client === 'string' && message.client.trim()) {
+        auth.client = message.client.trim().slice(0, 40);
+      }
+      return auth;
+    }
     case 'open':
       return typeof message.printerId === 'string'
         ? { type: 'open', printerId: message.printerId }

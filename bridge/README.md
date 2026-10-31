@@ -62,6 +62,15 @@ Served at `/`, it does two things:
   **Probe** opens the printer's port and fetches a status, so you can confirm a
   printer is reachable and loaded before anyone prints to it.
 
+  **Test label** prints one. The page draws the label in the browser with the
+  same library a kiosk uses (bundled into the page at build time), reads the
+  loaded roll off the printer to pick the right size, and sends it through
+  this bridge as an ordinary client, so the job appears in the print log like
+  any other. The bridge itself still never rasterises anything. The page uses
+  a short-lived token the admin API mints for it (`POST
+  /api/admin/tokens/ephemeral`, ten minutes, kept in memory only, never
+  listed), so no permanent client token is needed to press the button.
+
 ## A walk through the admin page
 
 Sign in with the admin token. A wrong token is refused in place.
@@ -85,6 +94,11 @@ path, so a wrong address is caught before anyone prints to it.
 
 ![Probe of an unreachable printer](docs/screenshots/07-probe-unreachable.png)
 
+**Test label** prints one through the bridge from the page itself, picking the
+roll the printer reports, and the print log below records it.
+
+![A test label printed from the admin page](docs/screenshots/11-test-label.png)
+
 The page follows the system colour scheme and fits a phone. The screenshots
 are regenerated with `node scripts/screenshots.mjs` after `npm run build`
 (needs Playwright on the path).
@@ -92,9 +106,10 @@ are regenerated with `node scripts/screenshots.mjs` after `npm run build`
 ## The print log and statistics
 
 The dashboard's **Recent prints** card lists the last few jobs (five by
-default, `RECENT_JOBS`), newest first: when, which printer, which token, how
-many labels, how big, how it ended, and whether the printer reported a fault
-while it ran. The printers table carries all-time counters per printer — jobs,
+default, `RECENT_JOBS`), newest first: when, which printer, which client (the
+token's name and, if the client gave one, its own — a kiosk's name), how many
+labels, how big, how it ended, and whether the printer reported a fault while
+it ran. The printers table carries all-time counters per printer — jobs,
 labels (with how many the printer itself confirmed) and jobs with faults — and
 the card's first line sums them.
 
@@ -134,7 +149,7 @@ All via environment variables; the defaults suit the container.
 | `PORT` | `8080` | TCP port to listen on. |
 | `HOST` | `0.0.0.0` | Address to bind. |
 | `DATA_DIR` | `/data` | Where `bridge.json` (tokens and printers) is kept. Mount a volume here. |
-| `ALLOWED_ORIGINS` | `*` | Comma-separated browser origins allowed to connect, or `*` for any. The bearer token is the real access control; this is defence in depth. |
+| `ALLOWED_ORIGINS` | `*` | Comma-separated browser origins allowed to connect, or `*` for any. The bridge's own origin — the admin page — is always allowed. The bearer token is the real access control; this is defence in depth. |
 | `TLS_CERT_FILE`, `TLS_KEY_FILE` | — | PEM files. Set both to serve HTTPS and `wss://` directly instead of behind a TLS proxy. |
 | `AUTH_TIMEOUT_MS` | `10000` | How long a connection may stay unauthenticated. |
 | `CONNECT_TIMEOUT_MS` | `5000` | How long to wait for a printer's port 9100 to accept. |

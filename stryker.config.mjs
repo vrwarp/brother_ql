@@ -33,6 +33,10 @@ export default {
     // literals in module specifiers, which no test can distinguish from a
     // failure to resolve the module at all.
     '!src/index.ts',
+    // The published test double and its barrel: test infrastructure, which a
+    // mutant would only prove the tests of the thing it fakes depend on.
+    '!src/testing.ts',
+    '!src/testing/**',
   ],
 
   // Run only the tests that actually cover the mutated statement. This needs a

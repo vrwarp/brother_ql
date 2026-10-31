@@ -558,3 +558,73 @@ describe('the print log', () => {
     client.close();
   });
 });
+
+describe('ephemeral tokens and the bridge\'s own origin', () => {
+  it('authenticates with a token minted by the admin API', async () => {
+    await startBridge();
+    const minted = await (await fetch(base.replace('ws://', 'http://') + '/api/admin/tokens/ephemeral', {
+      method: 'POST',
+      headers: { authorization: `Bearer ${ADMIN}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'Admin page' }),
+    })).json() as { token: string };
+    const id = await registerPrinter('none');
+    const client = await Client.connect(base);
+    await client.await('hello');
+    client.send({ type: 'auth', token: minted.token });
+    await client.await('auth-ok');
+    client.send({ type: 'open', printerId: id });
+    await client.await('opened');
+    client.send({ type: 'job', pages: 1 });
+    client.sendBinary(Buffer.alloc(8));
+    await client.await('ack');
+    client.send({ type: 'job-done', pagesPrinted: 1, confirmation: 'none' });
+    const deadline = Date.now() + 3000;
+    while (store.jobs.length < 1 && Date.now() < deadline) await new Promise((r) => setTimeout(r, 10));
+    expect(store.jobs[0]?.token).toBe('Admin page');
+    expect(store.tokens.map((t) => t.name)).toEqual(['client']); // nothing stored
+    client.close();
+  });
+
+  it('accepts a WebSocket from its own origin when ALLOWED_ORIGINS names only the kiosk', async () => {
+    await startBridge({ ALLOWED_ORIGINS: 'https://kiosk.example' });
+    const own = await Client.connect(base, { origin: base.replace('ws://', 'http://') });
+    expect((await own.await('hello')).version).toBe(BRIDGE_PROTOCOL_VERSION);
+    own.close();
+    await expect(Client.connect(base, { origin: 'https://evil.example' })).rejects.toBeTruthy();
+  });
+});
+
+describe('the client name', () => {
+  it('rides on the session\'s log lines and its job records', async () => {
+    await startBridge();
+    const id = await registerPrinter('none');
+    const client = await Client.connect(base);
+    await client.await('hello');
+    client.send({ type: 'auth', token: CLIENT, client: 'Nursery kiosk' });
+    await client.await('auth-ok');
+    client.send({ type: 'open', printerId: id });
+    await client.await('opened');
+    client.send({ type: 'job', pages: 1 });
+    client.sendBinary(Buffer.alloc(4));
+    await client.await('ack');
+    client.send({ type: 'job-done', pagesPrinted: 1, confirmation: 'none' });
+    const deadline = Date.now() + 3000;
+    while (store.jobs.length < 1 && Date.now() < deadline) await new Promise((r) => setTimeout(r, 10));
+    expect(store.jobs[0]).toMatchObject({ token: 'client', client: 'Nursery kiosk' });
+    client.close();
+  });
+
+  it('is optional, and trimmed to forty characters', async () => {
+    await startBridge();
+    const client = await Client.connect(base);
+    await client.await('hello');
+    client.send({ type: 'auth', token: CLIENT, client: '  ' + 'x'.repeat(60) });
+    await client.await('auth-ok');
+    client.close();
+    // Parsing is what caps it; the session stores what parsing kept.
+    const { parseClientMessage } = await import('../src/protocol.js');
+    const parsed = parseClientMessage(JSON.stringify({ type: 'auth', token: 't', client: '  ' + 'x'.repeat(60) }));
+    expect(parsed).toEqual({ type: 'auth', token: 't', client: 'x'.repeat(40) });
+    expect(parseClientMessage('{"type":"auth","token":"t","client":"   "}')).toEqual({ type: 'auth', token: 't' });
+  });
+});

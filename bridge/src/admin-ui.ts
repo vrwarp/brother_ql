@@ -75,10 +75,10 @@ export const ADMIN_PAGE = /* html */ `<!doctype html>
       <h2>Recent prints</h2>
       <p class="muted" id="totals">No prints yet.</p>
       <div class="table-wrap"><table>
-        <thead><tr><th>When</th><th>Printer</th><th>Token</th><th>Labels</th><th>Size</th><th>Outcome</th><th>Faults</th></tr></thead>
+        <thead><tr><th>When</th><th>Printer</th><th>Client</th><th>Labels</th><th>Size</th><th>Outcome</th><th>Faults</th></tr></thead>
         <tbody id="jobs"></tbody>
       </table></div>
-      <p class="muted">The last few jobs, newest first. <em>Labels</em> is what the client reported printing, or the pages it announced if it did not report; a tick means the printer itself confirmed them. <em>Faults</em> counts status packets with an error flag seen during the job. The page refreshes this every few seconds.</p>
+      <p class="muted">The last few jobs, newest first. <em>Client</em> is the token's name and, after the dot, what the client called itself — a kiosk's name — if it said. <em>Labels</em> is what the client reported printing, or the pages it announced if it did not report; a tick means the printer itself confirmed them. <em>Faults</em> counts status packets with an error flag seen during the job. The page refreshes this every few seconds.</p>
     </section>
 
     <section>
@@ -114,6 +114,16 @@ export const ADMIN_PAGE = /* html */ `<!doctype html>
         <button type="button" id="printer-cancel" class="hidden">Cancel</button>
       </form>
       <div id="probe-result" class="notice hidden"></div>
+      <div id="test-panel" class="notice hidden">
+        <strong id="test-title"></strong>
+        <p class="muted" id="test-intro">The label is drawn here in the browser with the same library a kiosk uses, and sent through this bridge as an ordinary client — the print log will show it. Pick the roll that is loaded if the printer could not say.</p>
+        <form class="row" id="test-form">
+          <label>Roll <select id="test-roll"></select></label>
+          <button class="primary" type="submit" id="test-print">Print test label</button>
+          <button type="button" id="test-close">Close</button>
+        </form>
+        <p id="test-result" class="muted"></p>
+      </div>
     </section>
 
     <section>
@@ -170,7 +180,7 @@ export const ADMIN_PAGE = /* html */ `<!doctype html>
       return '<tr><td>' + esc(p.name) + '</td><td class="mono">' + esc(p.host) + ':' + esc(p.port) + '</td><td>' + esc(p.model || '—') + '</td>' +
       '<td><span class="pill">' + esc(p.statusMode) + '</span></td><td>' + (p.busy ? '<span class="warn">printing</span>' : '<span class="ok">idle</span>') + '</td>' +
       '<td>' + num(st.jobs) + '</td><td>' + labels + '</td><td>' + faults + '</td>' +
-      '<td class="actions"><button data-probe="' + esc(p.id) + '">Probe</button><button data-edit="' + esc(p.id) + '">Edit</button><button class="danger" data-delete="' + esc(p.id) + '">Remove</button></td></tr>';
+      '<td class="actions"><button data-probe="' + esc(p.id) + '">Probe</button><button data-test="' + esc(p.id) + '">Test label</button><button data-edit="' + esc(p.id) + '">Edit</button><button class="danger" data-delete="' + esc(p.id) + '">Remove</button></td></tr>';
     }).join('')
       : '<tr><td colspan="9" class="muted">No printers yet. Add one below; the bridge needs its address on the network.</td></tr>';
     $('printers').dataset.records = JSON.stringify(printers);
@@ -187,7 +197,8 @@ export const ADMIN_PAGE = /* html */ `<!doctype html>
         : j.completions ? num(j.completions) + ' ✓' : j.pages !== null && j.pages !== undefined ? num(j.pages) : '—';
       const faults = j.faults && j.faults.length ? '<span class="bad">' + j.faults.length + '</span>' : '<span class="muted">0</span>';
       const title = esc(j.message || '') + (j.label ? ' label ' + esc(j.label) : '') + ' session ' + esc(j.session);
-      return '<tr title="' + title + '"><td>' + esc(when(j.finishedAt)) + '</td><td>' + esc(j.printerName) + '</td><td>' + esc(j.token) + '</td><td>' + labels + '</td><td>' + esc(size(j.bytes)) + ' <span class="muted">/ ' + num(j.frames) + ' frames</span></td>' +
+      const who = esc(j.token) + (j.client ? ' <span class="muted">· ' + esc(j.client) + '</span>' : '');
+      return '<tr title="' + title + '"><td>' + esc(when(j.finishedAt)) + '</td><td>' + esc(j.printerName) + '</td><td>' + who + '</td><td>' + labels + '</td><td>' + esc(size(j.bytes)) + ' <span class="muted">/ ' + num(j.frames) + ' frames</span></td>' +
         '<td><span class="' + cls + '">' + esc(word) + '</span>' + (j.message ? ' <span class="muted">' + esc(j.message) + '</span>' : '') + '</td><td>' + faults + '</td></tr>';
     }).join('') : '<tr><td colspan="7" class="muted">Nothing has been printed through the bridge yet.</td></tr>';
     const all = Object.values(stats || {});
@@ -294,10 +305,125 @@ export const ADMIN_PAGE = /* html */ `<!doctype html>
     } catch (error) { fail(error); }
   });
 
+  // --- Test label: rasterised here, printed through the bridge -------------
+  let lib = null;
+  const loadLib = async () => (lib ??= await import('/admin/lib.js'));
+  let testPrinter = null;
+  const hexToBytes = (hex) => Uint8Array.from(hex.split(/\\s+/).filter(Boolean).map((h) => parseInt(h, 16)));
+
+  /** Draw the test card at the label's dot size. White card, black text. */
+  function drawTestLabel(l, printer, rollId, when) {
+    const roll = l.labelsForModel(printer.model).find((r) => r.identifier === rollId);
+    const [width, fixedHeight] = l.expectedImageSize(rollId);
+    // Continuous tape has no fixed height (the library reports 0): give the
+    // card a sensible one, and never hand the printer an empty canvas.
+    const endless = roll ? l.isEndless(roll) : fixedHeight === 0;
+    const height = endless || fixedHeight === 0 ? Math.max(240, Math.round(width * 0.45)) : fixedHeight;
+    const canvas = document.createElement('canvas');
+    canvas.width = width; canvas.height = height;
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, width, height);
+    ctx.fillStyle = '#000'; ctx.textBaseline = 'top';
+    const pad = Math.round(height * 0.08);
+    const lines = [
+      ['Test label', Math.round(height * 0.30), true],
+      [printer.name + (printer.model ? ' · ' + printer.model : ''), Math.round(height * 0.15), false],
+      [roll ? l.labelName(roll) : rollId, Math.round(height * 0.12), false],
+      [when, Math.round(height * 0.12), false],
+    ];
+    let y = pad;
+    for (const [text, size, bold] of lines) {
+      ctx.font = (bold ? 'bold ' : '') + size + 'px system-ui, sans-serif';
+      // Shrink to fit the width, so a long printer name never runs off the edge.
+      let px = size;
+      while (px > 10 && ctx.measureText(text).width > width - 2 * pad) { px -= 2; ctx.font = (bold ? 'bold ' : '') + px + 'px system-ui, sans-serif'; }
+      ctx.fillText(text, pad, y);
+      y += Math.round(px * 1.25);
+    }
+    // A rule and a corner mark, so a label cropped or scaled wrong is obvious.
+    ctx.fillRect(pad, height - pad - 4, width - 2 * pad, 4);
+    ctx.fillRect(width - pad - 24, pad, 24, 24);
+    return canvas;
+  }
+
+  async function openTestPanel(p) {
+    testPrinter = p;
+    const panel = $('test-panel'), result = $('test-result'), roll = $('test-roll'), print = $('test-print');
+    panel.classList.remove('hidden');
+    $('test-title').textContent = 'Test label — ' + p.name;
+    roll.innerHTML = ''; result.textContent = '';
+    print.disabled = true;
+    if (!p.model) { result.innerHTML = '<span class="warn">Set the printer model (Edit) first — the label is drawn for one model’s print head.</span>'; return; }
+    try {
+      const l = await loadLib();
+      const rolls = l.labelsForModel(p.model);
+      roll.innerHTML = rolls.map((r) => '<option value="' + esc(r.identifier) + '">' + esc(l.labelName(r)) + '</option>').join('');
+      print.disabled = false;
+      if (p.statusMode === 'none') { result.textContent = 'This printer reports no status, so the roll cannot be read: choose it above. The job will be sent without confirmation.'; return; }
+      result.textContent = 'Reading the loaded roll…';
+      const { probe } = await api('POST', '/api/admin/printers/' + p.id + '/probe');
+      if (testPrinter !== p) return;
+      if (probe.status && probe.status.ok && probe.status.summary) {
+        const status = l.parseStatus(hexToBytes(probe.status.summary.hex));
+        const matches = l.suggestLabels(status, p.model).filter((r) => rolls.some((x) => x.identifier === r.identifier));
+        if (matches.length) {
+          // The plainest match, as a kiosk would guess: 62 mm over 62 mm black/red.
+          const pick = matches.slice().sort((a, b) => l.labelName(a).length - l.labelName(b).length)[0];
+          roll.value = pick.identifier;
+          result.textContent = 'The printer reports ' + esc(status.mediaWidthMm) + ' mm ' + esc(status.mediaType) + (matches.length > 1 ? ' — ' + matches.length + ' rolls match; the plainest is selected.' : '.');
+        } else {
+          result.textContent = 'The printer reports ' + esc(status.mediaWidthMm) + ' mm ' + esc(status.mediaType) + ', which matches no roll this model takes. Choose one above.';
+        }
+      } else {
+        result.innerHTML = '<span class="warn">Could not read the roll' + (probe.status && probe.status.error ? ': ' + esc(probe.status.error) : '') + '.</span> Choose it above.';
+      }
+    } catch (error) {
+      result.innerHTML = '<span class="bad">' + esc(error.message) + '</span>';
+    }
+  }
+
+  $('test-close').addEventListener('click', () => { testPrinter = null; $('test-panel').classList.add('hidden'); });
+
+  $('test-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const p = testPrinter; if (!p) return;
+    const rollId = $('test-roll').value, result = $('test-result'), button = $('test-print');
+    button.disabled = true;
+    result.textContent = 'Connecting through the bridge…';
+    let printer = null;
+    try {
+      const l = await loadLib();
+      const { token: ticket } = await api('POST', '/api/admin/tokens/ephemeral', { name: 'Admin page' });
+      const transport = new l.BridgeTransport({ url: wsUrl(), token: ticket, printerId: p.id });
+      printer = new l.BrotherQLPrinter(transport, { model: p.model });
+      l.enableBrowserImages(printer);
+      await printer.open();
+      const canvas = drawTestLabel(l, p, rollId, new Date().toLocaleString());
+      result.textContent = 'Sending…';
+      const r = await printer.print(canvas, { label: rollId, statusTimeoutMs: 20000 }, (progress) => {
+        if (progress.phase === 'sending') result.textContent = 'Sending… ' + Math.round(100 * progress.bytesSent / Math.max(1, progress.bytesTotal)) + '%';
+        if (progress.phase === 'printing') result.textContent = 'Printing…';
+      });
+      result.innerHTML = r.confirmation === 'none'
+        ? '<span class="ok">Sent.</span> This printer cannot confirm, so look at the tray.'
+        : '<span class="ok">Printed</span> — ' + r.pagesPrinted + ' label' + (r.pagesPrinted === 1 ? '' : 's') + ', confirmed by ' + (r.confirmation === 'pages' ? 'the printer' : 'polling its status') + '.';
+    } catch (error) {
+      const flags = Array.isArray(error && error.errors) ? error.errors.map((f) => f.message).join('; ') : '';
+      result.innerHTML = '<span class="bad">' + esc((error && error.name ? error.name + ': ' : '') + (error && error.message || String(error))) + '</span>' + (flags ? ' <span class="muted">' + esc(flags) + '</span>' : '') + (error && error.reason ? ' <span class="muted">(' + esc(error.reason) + ')</span>' : '');
+    } finally {
+      if (printer) await printer.close().catch(() => {});
+      button.disabled = false;
+      loadJobs().catch(() => {}); loadPrinters().catch(() => {});
+    }
+  });
+
   $('printers').addEventListener('click', async (e) => {
     const d = e.target.dataset || {};
     const records = JSON.parse($('printers').dataset.records || '[]');
-    if (d.edit) {
+    if (d.test) {
+      const p = records.find((r) => r.id === d.test);
+      if (p) openTestPanel(p);
+    } else if (d.edit) {
       const p = records.find((r) => r.id === d.edit);
       if (!p) return;
       $('printer-id').value = p.id;

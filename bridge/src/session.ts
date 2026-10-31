@@ -24,6 +24,7 @@ import { connect, type Socket } from 'node:net';
 
 import type { WebSocket } from 'ws';
 
+import type { EphemeralTokens } from './ephemeral.js';
 import { JobTracker, type JobMeta } from './jobs.js';
 import { hex, type Logger, type LogLevel } from './log.js';
 import {
@@ -70,9 +71,14 @@ export interface SessionContext {
   recentJobs: number;
   /** Frames quiet for this long end an unreported job. */
   jobIdleMs: number;
+  /** Short-lived tokens the admin API mints for its own page. */
+  ephemeral?: EphemeralTokens;
   /** Replaceable for tests. */
   snmpGet?: typeof snmpGet;
 }
+
+/** The id a session carries when it authenticated with an ephemeral token. */
+export const EPHEMERAL_TOKEN_ID = 'ephemeral';
 
 export function describePrinter(record: PrinterRecord, locks: PrinterLocks): BridgePrinterInfo {
   const info: BridgePrinterInfo = {
@@ -95,6 +101,8 @@ export class ClientSession {
   readonly #remote: string;
   readonly #jobs: JobTracker;
   #token: TokenRecord | null = null;
+  /** The name the client gave itself on auth, for the log. */
+  #client: string | undefined;
   #printer: PrinterRecord | null = null;
   #socket: Socket | null = null;
   /** Set while `close` from the client is being honoured, so the socket's own close is not reported as the printer's. */
@@ -158,6 +166,7 @@ export class ClientSession {
       session: this.id,
       remote: this.#remote,
       ...(this.#token ? { token: this.#token.name } : {}),
+      ...(this.#client ? { client: this.#client } : {}),
       ...(this.#printer ? { printer: this.#printer.name } : {}),
       ...data,
     });
@@ -173,9 +182,14 @@ export class ClientSession {
     this.#ws.send(bytes, { binary: true });
   }
 
-  #error(code: BridgeErrorCode, message: string): void {
-    this.#log('warn', 'refused', { code, message });
-    this.#send({ type: 'error', code, message });
+  /**
+   * Refuse something, naming the reply the client was waiting for where there
+   * is one, so a late refusal of a frame cannot be mistaken for the answer to
+   * the next request.
+   */
+  #error(code: BridgeErrorCode, message: string, replyTo?: 'ack' | 'opened' | 'status-sent' | 'closed'): void {
+    this.#log('warn', 'refused', { code, message, ...(replyTo ? { in: replyTo } : {}) });
+    this.#send(replyTo ? { type: 'error', code, message, in: replyTo } : { type: 'error', code, message });
   }
 
   #printers(): BridgePrinterInfo[] {
@@ -189,6 +203,7 @@ export class ClientSession {
       printerId: this.#printer.id,
       printerName: this.#printer.name,
       token: this.#token.name,
+      ...(this.#client ? { client: this.#client } : {}),
     };
   }
 
@@ -215,6 +230,7 @@ export class ClientSession {
       return;
     }
     if (message.type === 'auth') {
+      this.#client = message.client;
       this.#auth(message.token);
       return;
     }
@@ -258,7 +274,15 @@ export class ClientSession {
       this.#send({ type: 'auth-ok', printers: this.#printers() });
       return;
     }
-    const record = this.#ctx.store.tokens.find((candidate) => tokenMatches(token, candidate.hash));
+    const stored = this.#ctx.store.tokens.find((candidate) => tokenMatches(token, candidate.hash));
+    // The admin page prints its test labels with a token minted a moment ago
+    // and kept only in memory; it looks like any other client from here on.
+    const grant = stored ? null : this.#ctx.ephemeral?.find(token);
+    const record: TokenRecord | null =
+      stored ??
+      (grant
+        ? { id: EPHEMERAL_TOKEN_ID, name: grant.name, hash: '', hint: 'ephemeral', createdAt: new Date().toISOString() }
+        : null);
     if (!record) {
       this.#log('warn', 'rejected token', { hint: token.slice(0, 12) });
       this.#send({ type: 'error', code: 'unauthorized', message: 'Unknown token.' });
@@ -268,23 +292,23 @@ export class ClientSession {
     this.#token = record;
     if (this.#authTimer) clearTimeout(this.#authTimer);
     this.#authTimer = null;
-    void this.#ctx.store.touchToken(record.id);
+    if (record.id !== EPHEMERAL_TOKEN_ID) void this.#ctx.store.touchToken(record.id);
     this.#log('info', 'client authenticated', {});
     this.#send({ type: 'auth-ok', printers: this.#printers() });
   }
 
   #open(printerId: string): void {
     if (this.#printer) {
-      this.#error('already-open', `${this.#printer.name} is already open on this connection.`);
+      this.#error('already-open', `${this.#printer.name} is already open on this connection.`, 'opened');
       return;
     }
     const record = this.#ctx.store.findPrinter(printerId);
     if (!record) {
-      this.#error('unknown-printer', `No printer with id ${printerId}.`);
+      this.#error('unknown-printer', `No printer with id ${printerId}.`, 'opened');
       return;
     }
     if (!this.#ctx.locks.acquire(record.id, this)) {
-      this.#error('printer-busy', `${record.name} is in use by another client.`);
+      this.#error('printer-busy', `${record.name} is in use by another client.`, 'opened');
       return;
     }
     this.#printer = record;
@@ -323,7 +347,7 @@ export class ClientSession {
       if (!connected) {
         this.#log('warn', 'printer connect failed', { error: code, ms: Date.now() - started });
         this.#releasePrinter();
-        this.#error('connect-failed', `Could not connect to ${record.host}:${record.port}: ${code}.`);
+        this.#error('connect-failed', `Could not connect to ${record.host}:${record.port}: ${code}.`, 'opened');
         return;
       }
       this.#log('warn', 'printer socket error', { error: code });
@@ -352,7 +376,7 @@ export class ClientSession {
     }
     const meta = this.#meta();
     if (!socket || !meta || socket.connecting) {
-      this.#error('not-open', 'Open a printer before sending data.');
+      this.#error('not-open', 'Open a printer before sending data.', 'ack');
       return;
     }
     const started = Date.now();
@@ -360,7 +384,7 @@ export class ClientSession {
       if (error) {
         const code = (error as NodeJS.ErrnoException).code ?? error.message;
         this.#log('warn', 'write to printer failed', { bytes: bytes.length, error: code });
-        this.#error('write-failed', `Writing to the printer failed: ${code}.`);
+        this.#error('write-failed', `Writing to the printer failed: ${code}.`, 'ack');
         return;
       }
       this.#jobs.frame(meta, bytes.length);
@@ -373,22 +397,22 @@ export class ClientSession {
     const printer = this.#printer;
     const socket = this.#socket;
     if (!printer || !socket || socket.connecting) {
-      this.#error('not-open', 'Open a printer before asking for its status.');
+      this.#error('not-open', 'Open a printer before asking for its status.', 'status-sent');
       return;
     }
     if (this.#statusInFlight) {
-      this.#error('bad-request', 'A status request is already in progress.');
+      this.#error('bad-request', 'A status request is already in progress.', 'status-sent');
       return;
     }
     const started = Date.now();
     switch (printer.statusMode) {
       case 'none':
-        this.#error('status-unavailable', `${printer.name} is registered without a status path.`);
+        this.#error('status-unavailable', `${printer.name} is registered without a status path.`, 'status-sent');
         return;
       case 'tcp':
         socket.write(STATUS_REQUEST, (error) => {
           if (error) {
-            this.#error('status-failed', `Writing the status request failed: ${error.message}.`);
+            this.#error('status-failed', `Writing the status request failed: ${error.message}.`, 'status-sent');
           } else {
             this.#log('debug', 'status requested', { via: 'tcp' });
             this.#send({ type: 'status-sent' });
@@ -415,7 +439,7 @@ export class ClientSession {
         } catch (error) {
           if (this.#printer !== printer) return;
           this.#log('warn', 'status fetch failed', { via: 'snmp', ms: Date.now() - started, error: (error as Error).message });
-          this.#send({ type: 'error', code: 'status-failed', message: (error as Error).message });
+          this.#send({ type: 'error', code: 'status-failed', message: (error as Error).message, in: 'status-sent' });
         } finally {
           this.#statusInFlight = false;
         }
@@ -426,7 +450,7 @@ export class ClientSession {
 
   #closePrinter(reason: 'client'): void {
     if (!this.#printer || !this.#socket) {
-      this.#error('not-open', 'No printer is open.');
+      this.#error('not-open', 'No printer is open.', 'closed');
       return;
     }
     this.#closingByClient = true;

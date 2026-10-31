@@ -41,6 +41,8 @@ export interface JobRecord {
   printerName: string;
   /** The client token's name. */
   token: string;
+  /** What the client called itself on auth — a kiosk's name — if it did. */
+  client?: string;
   startedAt: string;
   finishedAt: string;
   durationMs: number;
@@ -107,6 +109,7 @@ export interface JobMeta {
   printerId: string;
   printerName: string;
   token: string;
+  client?: string;
 }
 
 export interface JobTrackerOptions {

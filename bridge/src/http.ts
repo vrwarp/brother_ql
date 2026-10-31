@@ -11,10 +11,14 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { randomUUID } from 'node:crypto';
 import { createRequire } from 'node:module';
+import { readFile } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
+import { dirname, resolve } from 'node:path';
 
 import { ADMIN_PAGE } from './admin-ui.js';
 import type { BridgeConfig } from './config.js';
-import { originAllowed } from './config.js';
+import { DEFAULT_EPHEMERAL_TTL_MS, type EphemeralTokens } from './ephemeral.js';
+import { originAllowedForRequest } from './origin.js';
 import type { Logger } from './log.js';
 import { probePrinter, type ProbeResult } from './probe.js';
 import { BRIDGE_PROTOCOL_VERSION } from './protocol.js';
@@ -30,9 +34,19 @@ export interface HttpContext {
   log: Logger;
   /** When this process started, for the diagnostics bundle. */
   startedAt?: Date;
+  /** Short-lived tokens for the admin page's own printing. */
+  ephemeral?: EphemeralTokens;
+  /**
+   * The printer library bundled for the admin page (`npm run build` writes it
+   * to `dist/public/admin-lib.js`); served at `/admin/lib.js`.
+   */
+  adminLibPath?: string;
   /** Replaceable for tests. */
   probe?: (printer: Parameters<typeof probePrinter>[0]) => Promise<ProbeResult>;
 }
+
+/** Next to this module in `dist/`, or nowhere while running from source. */
+const DEFAULT_ADMIN_LIB_PATH = resolve(dirname(fileURLToPath(import.meta.url)), 'public/admin-lib.js');
 
 const { version: BRIDGE_VERSION } = createRequire(import.meta.url)('../package.json') as {
   version: string;
@@ -99,6 +113,9 @@ function publicToken(token: TokenRecord): Omit<TokenRecord, 'hash'> {
 export function createHttpHandler(ctx: HttpContext): (req: IncomingMessage, res: ServerResponse) => void {
   const { config, store, locks, log } = ctx;
   const startedAt = ctx.startedAt ?? new Date();
+  const adminLibPath = ctx.adminLibPath ?? DEFAULT_ADMIN_LIB_PATH;
+  /** Read once; the file only changes with a redeploy. */
+  let adminLib: Buffer | null = null;
   const probe = ctx.probe ?? ((printer) =>
     probePrinter(printer, {
       connectTimeoutMs: config.connectTimeoutMs,
@@ -113,12 +130,17 @@ export function createHttpHandler(ctx: HttpContext): (req: IncomingMessage, res:
     }
   }
 
-  async function requireClient(req: IncomingMessage): Promise<TokenRecord> {
+  async function requireClient(req: IncomingMessage): Promise<Pick<TokenRecord, 'id' | 'name'>> {
     const token = bearerFrom(req.headers.authorization);
     const record = token ? store.tokens.find((candidate) => tokenMatches(token, candidate.hash)) : undefined;
-    if (!record) throw new HttpError(401, 'Bearer token required.');
-    await store.touchToken(record.id);
-    return record;
+    if (record) {
+      await store.touchToken(record.id);
+      return record;
+    }
+    // The admin page's short-lived token is a client token too.
+    const grant = token ? ctx.ephemeral?.find(token) : null;
+    if (grant) return { id: 'ephemeral', name: grant.name };
+    throw new HttpError(401, 'Bearer token required.');
   }
 
   async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -129,7 +151,9 @@ export function createHttpHandler(ctx: HttpContext): (req: IncomingMessage, res:
     if (path !== '/healthz') log('debug', 'http', { method, path, origin });
 
     if (path.startsWith('/api/')) {
-      if (!originAllowed(origin, config.allowedOrigins)) throw new HttpError(403, 'Origin not allowed.');
+      if (!originAllowedForRequest(req.headers, config.allowedOrigins)) {
+        throw new HttpError(403, 'Origin not allowed.');
+      }
       if (origin) {
         res.setHeader('access-control-allow-origin', origin);
         res.setHeader('vary', 'origin');
@@ -146,6 +170,31 @@ export function createHttpHandler(ctx: HttpContext): (req: IncomingMessage, res:
 
     if (path === '/healthz') {
       json(res, 200, { ok: true, printers: store.printers.length });
+      return;
+    }
+
+    // The printer library, for the admin page's test label. Public like the
+    // page itself: it is published code, and the page cannot load it with a
+    // bearer header anyway.
+    if (path === '/admin/lib.js') {
+      if (method !== 'GET' && method !== 'HEAD') throw new HttpError(405, 'Method not allowed.');
+      if (!adminLib) {
+        try {
+          adminLib = await readFile(adminLibPath);
+        } catch {
+          throw new HttpError(
+            404,
+            'The admin page\'s library bundle is missing. It is written by `npm run build`; the Docker image carries it.',
+          );
+        }
+      }
+      res.writeHead(200, {
+        'content-type': 'text/javascript; charset=utf-8',
+        'content-length': adminLib.length,
+        'cache-control': 'no-store',
+        'x-content-type-options': 'nosniff',
+      });
+      res.end(method === 'HEAD' ? undefined : adminLib);
       return;
     }
 
@@ -248,6 +297,18 @@ export function createHttpHandler(ctx: HttpContext): (req: IncomingMessage, res:
           'content-disposition': `attachment; filename="brother-ql-bridge-diagnostics-${now.toISOString().replace(/[:.]/g, '-')}.json"`,
         });
         res.end(payload);
+        return;
+      }
+
+      if (resource === 'tokens' && id === 'ephemeral' && method === 'POST') {
+        // For the admin page's own test label: a token that lives in memory
+        // for a few minutes, never stored, never listed. See ephemeral.ts.
+        if (!ctx.ephemeral) throw new HttpError(503, 'Ephemeral tokens are not enabled.');
+        const body = (await readBody(req)) as { name?: unknown };
+        const name = typeof body.name === 'string' && body.name.trim() ? body.name.trim().slice(0, 40) : 'Admin page';
+        const { token, expiresAt } = ctx.ephemeral.issue(name, DEFAULT_EPHEMERAL_TTL_MS);
+        log('info', 'ephemeral token issued', { name });
+        json(res, 201, { token, expiresInSeconds: Math.round((expiresAt - Date.now()) / 1000) });
         return;
       }
 

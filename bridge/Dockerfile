@@ -12,7 +12,10 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci
 
+# The build is `tsc` and then the esbuild bundling of the admin page's copy of
+# the printer library (scripts/bundle-admin-lib.mjs), so the script comes too.
 COPY tsconfig.json tsconfig.build.json ./
+COPY scripts ./scripts
 COPY src ./src
 RUN npm run build
 

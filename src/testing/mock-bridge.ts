@@ -4,8 +4,13 @@
  * The bridge transport is tested the way the USB transport is: against a
  * double that speaks the real protocol and can be told to misbehave. The fake
  * server here implements `bridge/src/protocol.ts` from memory — hello, auth,
- * list, open, acks, status, close — and records every byte that would have
- * reached a printer, so tests can assert on the exact job sent.
+ * list, open, acks, status, close, the job log — and records every byte that
+ * would have reached a printer, so tests can assert on the exact job sent.
+ *
+ * Published under `@vrwarp/brother-ql-webusb/testing` so an application that
+ * drives `BridgeTransport` can test its own printing code against the same
+ * double, rather than re-implementing the protocol. It has no dependency on
+ * Node or the DOM: timers and typed arrays only.
  */
 
 import {
@@ -13,8 +18,8 @@ import {
   type BridgeClientMessage,
   type BridgePrinterInfo,
   type BridgeServerMessage,
-} from '../../src/bridge/protocol.js';
-import type { MinimalSocketEvent, MinimalWebSocket } from '../../src/bridge/transport.js';
+} from '../bridge/protocol.js';
+import type { MinimalSocketEvent, MinimalWebSocket } from '../bridge/transport.js';
 
 export interface FakeBridgeOptions {
   /** Tokens the fake accepts. Defaults to `['secret']`. */
@@ -56,6 +61,8 @@ export class FakeSession {
   statusRequests = 0;
   /** Job announcements and reports, in order, as the bridge's print log would see them. */
   readonly jobs: Extract<BridgeClientMessage, { type: 'job' | 'job-done' }>[] = [];
+  /** The name the client gave on auth, if any. */
+  client: string | undefined;
 
   constructor(readonly socket: MockWebSocket) {}
 
@@ -193,6 +200,7 @@ export class FakeBridgeServer {
         return;
       }
       session.authed = true;
+      session.client = message.client;
       session.send({ type: 'auth-ok', printers: this.printers });
       return;
     }
@@ -206,20 +214,20 @@ export class FakeBridgeServer {
         return;
       case 'open': {
         if (session.printer) {
-          session.send({ type: 'error', code: 'already-open', message: 'A printer is open.' });
+          session.send({ type: 'error', code: 'already-open', message: 'A printer is open.', in: 'opened' });
           return;
         }
         const printer = this.printers.find((candidate) => candidate.id === message.printerId);
         if (!printer) {
-          session.send({ type: 'error', code: 'unknown-printer', message: 'No such printer.' });
+          session.send({ type: 'error', code: 'unknown-printer', message: 'No such printer.', in: 'opened' });
           return;
         }
         if (printer.busy) {
-          session.send({ type: 'error', code: 'printer-busy', message: 'In use elsewhere.' });
+          session.send({ type: 'error', code: 'printer-busy', message: 'In use elsewhere.', in: 'opened' });
           return;
         }
         if (this.options.connectFails) {
-          session.send({ type: 'error', code: 'connect-failed', message: 'ECONNREFUSED' });
+          session.send({ type: 'error', code: 'connect-failed', message: 'ECONNREFUSED', in: 'opened' });
           return;
         }
         this.#busy.add(printer.id);
@@ -245,13 +253,13 @@ export class FakeBridgeServer {
 
   #receiveBinary(session: FakeSession, bytes: Uint8Array): void {
     if (!session.printer) {
-      session.send({ type: 'error', code: 'not-open', message: 'Open a printer first.' });
+      session.send({ type: 'error', code: 'not-open', message: 'Open a printer first.', in: 'ack' });
       return;
     }
     session.written.push(bytes);
     if (this.options.neverAck) return;
     if (this.options.failWrites) {
-      session.send({ type: 'error', code: 'write-failed', message: 'EPIPE' });
+      session.send({ type: 'error', code: 'write-failed', message: 'EPIPE', in: 'ack' });
       return;
     }
     const printer = session.printer;
@@ -265,7 +273,7 @@ export class FakeBridgeServer {
   #status(session: FakeSession): void {
     const printer = session.printer;
     if (!printer) {
-      session.send({ type: 'error', code: 'not-open', message: 'Open a printer first.' });
+      session.send({ type: 'error', code: 'not-open', message: 'Open a printer first.', in: 'status-sent' });
       return;
     }
     session.statusRequests += 1;
@@ -275,6 +283,7 @@ export class FakeBridgeServer {
           type: 'error',
           code: 'status-unavailable',
           message: 'This printer has no status path.',
+          in: 'status-sent',
         });
         return;
       case 'tcp': {
@@ -289,7 +298,7 @@ export class FakeBridgeServer {
         const entry = script.length === 0 ? null : script[this.#statusIndex % script.length];
         this.#statusIndex += 1;
         if (entry === 'fail') {
-          session.send({ type: 'error', code: 'status-failed', message: 'SNMP timed out.' });
+          session.send({ type: 'error', code: 'status-failed', message: 'SNMP timed out.', in: 'status-sent' });
           return;
         }
         if (entry) session.emit(entry);

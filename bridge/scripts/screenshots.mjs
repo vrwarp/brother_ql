@@ -28,11 +28,24 @@ const status = Buffer.alloc(32);
 status.set([0x80, 0x20, 0x42, 0x30, 0x49, 0x30]);
 status[10] = 62;
 status[11] = 0x0a;
+const mk = (statusType, phase) => { const p = Buffer.from(status); p[18] = statusType; p[19] = phase; return p; };
 const printer = createServer((s) => {
+  let idle;
   s.on('data', (d) => {
     if (d.includes(Buffer.from([0x1b, 0x69, 0x53]))) s.write(status);
+    // Job bytes: once they stop, answer like a printer that printed one page.
+    if (d.length > 64) {
+      clearTimeout(idle);
+      idle = setTimeout(() => {
+        if (s.destroyed) return;
+        s.write(mk(0x06, 0x01)); // phase change: printing
+        s.write(mk(0x01, 0x00)); // printing completed
+        s.write(mk(0x06, 0x00)); // phase change: waiting
+      }, 150);
+    }
   });
   s.on('error', () => {});
+  s.on('close', () => clearTimeout(idle));
 });
 await new Promise((r) => printer.listen(0, '127.0.0.1', r));
 
@@ -114,6 +127,15 @@ await shot('07-probe-unreachable');
 await page.click('#printers button[data-edit]');
 await page.waitForFunction(() => document.querySelector('#printer-submit')?.textContent === 'Save changes');
 await shot('08-edit-printer');
+await page.click('#printer-cancel');
+
+// A test label through the bridge, from the page itself.
+await page.click('#printers button[data-test]');
+await page.waitForFunction(() => !document.querySelector('#test-print')?.disabled && /reports/.test(document.querySelector('#test-result')?.textContent ?? ''), null, { timeout: 15000 });
+await page.click('#test-print');
+await page.waitForFunction(() => /Printed|Sent|Error/.test(document.querySelector('#test-result')?.textContent ?? ''), null, { timeout: 30000 });
+await new Promise((r) => setTimeout(r, 600)); // the print log refresh
+await shot('11-test-label');
 
 const signedIn = async (context) => {
   const p = await context.newPage();
@@ -134,5 +156,5 @@ await mobile.screenshot({ path: `${OUT}10-mobile.png`, fullPage: true });
 await browser.close();
 await bridge.stop();
 printer.close();
-console.log(`wrote 10 screenshots to ${OUT}`);
+console.log(`wrote 11 screenshots to ${OUT}`);
 process.exit(0);

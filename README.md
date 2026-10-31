@@ -277,6 +277,32 @@ poll — one SNMP datagram dropped on Wi-Fi — is retried, not reported.
 The transport also tells the bridge what each job is (page count and label)
 and how it ended, which is what the bridge's print log and per-printer
 counters are built from. This costs nothing on USB, which has no such hooks.
+Pass `clientName` so the log can say which client printed when several share
+one token.
+
+**Sharing a printer between clients.** The bridge locks a printer to the
+connection that opened it, and by default the transport opens it when it
+opens and holds it, as a USB printer is held. Two clients sharing one printer
+want the opposite, so pass a `lease`:
+
+```ts
+new BridgeTransport({ url, token, printerId, clientName: 'Nursery kiosk',
+  lease: { idleMs: 3000, busyTimeoutMs: 30_000 } });
+```
+
+The authenticated socket stays up, which is how the client knows the bridge is
+reachable and the printer registered, but the printer is opened at a job's
+first write and released `idleMs` after the job is reported over, so a batch
+of labels shares one open. A printer another client holds is retried with
+backoff for `busyTimeoutMs`, then the job fails with a `bridge` error whose
+reason is `printer-busy`. A printer lost under a job fails that job and
+nothing else: the socket is kept, and the next job takes the lease afresh.
+
+**Testing your own printing code.** `@vrwarp/brother-ql-webusb/testing`
+exports the scripted fake bridge the library's suite uses: hand
+`new FakeBridgeServer(options).factory` to `BridgeTransport` as its
+`webSocketFactory` and drive the real transport against late acks, dropped
+sockets, each status mode, scripted status answers and the job log.
 
 Running the bridge, its admin interface, the Docker image and the security
 notes are covered in [`bridge/README.md`](./bridge/README.md).

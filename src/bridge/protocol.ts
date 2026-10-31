@@ -60,7 +60,8 @@ export type BridgeJobConfirmation = 'pages' | 'phase' | 'none';
 
 /** Messages the client sends. */
 export type BridgeClientMessage =
-  | { type: 'auth'; token: string }
+  /** `client` names the connection for the bridge's log — a kiosk's name, say. */
+  | { type: 'auth'; token: string; client?: string }
   | { type: 'list' }
   | { type: 'open'; printerId: string }
   | { type: 'status' }
@@ -84,7 +85,13 @@ export type BridgeServerMessage =
   /** The status request was carried out; any answer arrived as a binary frame. */
   | { type: 'status-sent' }
   | { type: 'closed'; reason: 'client' | 'printer' | 'error'; message?: string }
-  | { type: 'error'; code: BridgeErrorCode; message: string };
+  /**
+   * `in` names the reply this error stands in for (`ack`, `opened`,
+   * `status-sent`, `closed`), so a client can tell a late error for a frame
+   * it has given up on from the answer to what it is asking now. Absent on
+   * errors that answer no request in particular.
+   */
+  | { type: 'error'; code: BridgeErrorCode; message: string; in?: string };
 
 /** Parse a text frame, or return null for anything that is not a message. */
 export function parseServerMessage(text: string): BridgeServerMessage | null {

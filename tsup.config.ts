@@ -29,6 +29,7 @@ export default defineConfig({
     'src/convert.ts',
     'src/labels.ts',
     'src/models.ts',
+    'src/testing.ts',
   ],
   format: ['esm'],
   target: 'es2022',
