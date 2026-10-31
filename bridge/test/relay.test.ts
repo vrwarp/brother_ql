@@ -16,7 +16,7 @@ import { WebSocket } from 'ws';
 
 import { loadConfig } from '../src/config.js';
 import { silentLogger } from '../src/log.js';
-import type { BridgeServerMessage } from '../src/protocol.js';
+import { BRIDGE_PROTOCOL_VERSION, type BridgeServerMessage } from '../src/protocol.js';
 import { createBridgeServer, ensureAdminToken, type BridgeServer } from '../src/server.js';
 import { Store } from '../src/store.js';
 import { generateToken, hashToken, tokenHint } from '../src/tokens.js';
@@ -191,7 +191,7 @@ describe('handshake and auth', () => {
   it('greets with the protocol version', async () => {
     await startBridge();
     const client = await Client.connect(base);
-    expect((await client.await('hello')).version).toBe(1);
+    expect((await client.await('hello')).version).toBe(BRIDGE_PROTOCOL_VERSION);
     client.close();
   });
 
@@ -424,6 +424,137 @@ describe('status modes', () => {
     await client.await('status-sent');
     await new Promise((r) => setTimeout(r, 20));
     expect(printer.bytes.subarray(0, 3).equals(Buffer.from([0x1b, 0x69, 0x53]))).toBe(true);
+    client.close();
+  });
+});
+
+describe('the print log', () => {
+  async function openClient(statusMode: 'snmp' | 'tcp' | 'none'): Promise<{ client: Client; id: string }> {
+    const id = await registerPrinter(statusMode);
+    const client = await Client.connect(base);
+    await client.await('hello');
+    client.send({ type: 'auth', token: CLIENT });
+    await client.await('auth-ok');
+    client.send({ type: 'open', printerId: id });
+    await client.await('opened');
+    return { client, id };
+  }
+
+  async function untilJobs(count: number): Promise<void> {
+    const deadline = Date.now() + 3000;
+    while (store.jobs.length < count && Date.now() < deadline) await new Promise((r) => setTimeout(r, 10));
+  }
+
+  it('records an announced job with the client\'s report, and counts its labels', async () => {
+    await startBridge();
+    const { client, id } = await openClient('none');
+    client.send({ type: 'job', pages: 2, label: '62' });
+    client.sendBinary(Buffer.alloc(1000, 1));
+    client.sendBinary(Buffer.alloc(500, 2));
+    await client.await('ack');
+    await new Promise((r) => setTimeout(r, 30));
+    client.send({ type: 'job-done', pagesPrinted: 2, confirmation: 'phase' });
+    await untilJobs(1);
+    const job = store.jobs[0]!;
+    expect(job).toMatchObject({
+      printerId: id,
+      printerName: 'Fake',
+      token: 'client',
+      pages: 2,
+      label: '62',
+      pagesPrinted: 2,
+      confirmation: 'phase',
+      outcome: 'printed',
+      bytes: 1500,
+      frames: 2,
+      faults: [],
+    });
+    expect(job.session).toMatch(/^[0-9a-f]{8}$/);
+    expect(store.statsFor(id)).toMatchObject({ jobs: 1, labels: 2, labelsConfirmed: 2, bytes: 1500 });
+    client.close();
+  });
+
+  it('records a failure the client reports, and faults the printer reported along the way', async () => {
+    await printer.close();
+    // A tcp printer that answers the first bytes it sees with an error status.
+    const fault = Buffer.alloc(32);
+    fault.set([0x80, 0x20, 0x42]);
+    fault[9] = 0x10; // cover open
+    fault[18] = 0x02;
+    printer = await FakePrinter.listen((_d, socket) => socket.write(fault));
+    await startBridge();
+    const { client, id } = await openClient('tcp');
+    client.send({ type: 'job', pages: 1 });
+    client.sendBinary(Buffer.alloc(64, 7));
+    await client.await('ack');
+    await new Promise((r) => setTimeout(r, 40));
+    client.send({ type: 'job-done', pagesPrinted: 0, confirmation: 'none', error: 'PrinterStatusError: Cover opened while printing' });
+    await untilJobs(1);
+    const job = store.jobs[0]!;
+    expect(job.outcome).toBe('failed');
+    expect(job.message).toMatch(/Cover opened/);
+    expect(job.faults.length).toBeGreaterThanOrEqual(1);
+    expect(job.faults[0]).toMatchObject({ statusType: 'error', errorInfo: [0, 0x10] });
+    expect(store.statsFor(id)).toMatchObject({ jobs: 1, labels: 0, jobsWithFaults: 1 });
+    client.close();
+  });
+
+  it('records an unannounced job as sent when the client closes the printer', async () => {
+    await startBridge();
+    const { client } = await openClient('none');
+    client.sendBinary(Buffer.alloc(10));
+    await client.await('ack');
+    client.send({ type: 'close' });
+    await client.await('closed');
+    await untilJobs(1);
+    expect(store.jobs[0]).toMatchObject({ outcome: 'sent', pages: null, pagesPrinted: null, bytes: 10 });
+    client.close();
+  });
+
+  it('records a job cut short by the printer hanging up, and by the client leaving', async () => {
+    await startBridge();
+    const first = await openClient('none');
+    first.client.send({ type: 'job', pages: 3 });
+    first.client.sendBinary(Buffer.alloc(10));
+    await first.client.await('ack');
+    printer.dropClients();
+    await first.client.await('closed');
+    await untilJobs(1);
+    expect(store.jobs[0]).toMatchObject({ outcome: 'printer-closed', pages: 3 });
+    first.client.close();
+    await first.client.closed;
+
+    const second = await openClient('none');
+    second.client.sendBinary(Buffer.alloc(10));
+    await second.client.await('ack');
+    second.client.close();
+    await untilJobs(2);
+    expect(store.jobs[0]).toMatchObject({ outcome: 'disconnected' });
+  });
+
+  it('keeps only the configured number of jobs', async () => {
+    await startBridge({ RECENT_JOBS: '2' });
+    const { client } = await openClient('none');
+    for (let i = 0; i < 3; i++) {
+      client.send({ type: 'job', pages: 1 });
+      client.sendBinary(Buffer.alloc(5));
+      client.send({ type: 'job-done', pagesPrinted: 1, confirmation: 'none' });
+      await new Promise((r) => setTimeout(r, 30));
+    }
+    await untilJobs(2);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(store.jobs).toHaveLength(2);
+    client.close();
+  });
+
+  it('refuses a job announcement before a printer is open', async () => {
+    await startBridge();
+    const client = await Client.connect(base);
+    await client.await('hello');
+    client.send({ type: 'auth', token: CLIENT });
+    await client.await('auth-ok');
+    client.send({ type: 'job', pages: 1 });
+    expect((await client.await('error')).code).toBe('not-open');
     client.close();
   });
 });

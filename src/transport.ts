@@ -37,6 +37,23 @@ import { STATUS_HEADER, STATUS_PACKET_LENGTH } from './status.js';
  */
 export type CompletionMode = 'pages' | 'phase' | 'none';
 
+/** How a finished job was confirmed. Shared by the result and the job hooks. */
+export type JobConfirmation = 'pages' | 'phase' | 'none';
+
+/** What a transport is told before a job is written. */
+export interface JobAnnouncement {
+  pages: number;
+  label?: string;
+}
+
+/** What a transport is told once a job is over, however it ended. */
+export interface JobReport {
+  pagesPrinted: number;
+  confirmation: JobConfirmation;
+  /** Set when the job failed: the error's name and message. */
+  error?: string;
+}
+
 export interface Transport {
   /** Whether {@link Transport.write} can be called. */
   readonly opened: boolean;
@@ -52,13 +69,24 @@ export interface Transport {
    * Write a job in chunks.
    *
    * @param onProgress Called after each chunk with the running byte count.
-   * @param betweenChunks Runs before each chunk; throwing abandons the job.
+   * @param betweenChunks Runs before each chunk and is awaited; throwing
+   *   abandons the job. The core uses it to drain status between chunks and,
+   *   on a polled transport, to ask for status now and then mid-job.
    */
   write(
     data: Uint8Array,
     onProgress?: (bytesSent: number, bytesTotal: number) => void,
-    betweenChunks?: () => void,
+    betweenChunks?: () => void | Promise<void>,
   ): Promise<void>;
+
+  /**
+   * Told before a job is written, so a far side that keeps a print log can
+   * know what the bytes were. Best effort: must never throw.
+   */
+  beginJob?(job: JobAnnouncement): void;
+
+  /** Told once the announced job is over. Best effort: must never throw. */
+  endJob?(report: JobReport): void;
 
   /**
    * Ask the printer for its status by whatever means this connection has.

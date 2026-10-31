@@ -456,7 +456,7 @@ export class UsbTransport extends TypedEventTarget<TransportEvents> implements T
   async write(
     data: Uint8Array,
     onProgress?: (bytesSent: number, bytesTotal: number) => void,
-    betweenChunks?: () => void,
+    betweenChunks?: () => void | Promise<void>,
   ): Promise<void> {
     if (this.#state !== 'open') {
       throw new DeviceDisconnectedError();
@@ -472,7 +472,8 @@ export class UsbTransport extends TypedEventTarget<TransportEvents> implements T
 
     let sent = 0;
     while (sent < data.length) {
-      betweenChunks?.();
+      const pause = betweenChunks?.();
+      if (pause) await pause;
 
       const chunk = data.subarray(sent, Math.min(sent + this.#chunkSize, data.length));
       const chunkStarted = Date.now();

@@ -8,14 +8,19 @@
  * reached a printer, so tests can assert on the exact job sent.
  */
 
-import type { BridgeClientMessage, BridgePrinterInfo, BridgeServerMessage } from '../../src/bridge/protocol.js';
+import {
+  BRIDGE_PROTOCOL_VERSION,
+  type BridgeClientMessage,
+  type BridgePrinterInfo,
+  type BridgeServerMessage,
+} from '../../src/bridge/protocol.js';
 import type { MinimalSocketEvent, MinimalWebSocket } from '../../src/bridge/transport.js';
 
 export interface FakeBridgeOptions {
   /** Tokens the fake accepts. Defaults to `['secret']`. */
   tokens?: string[];
   printers?: BridgePrinterInfo[];
-  /** Version announced in `hello`; `null` never greets at all. Defaults to 1. */
+  /** Version announced in `hello`; `null` never greets at all. Defaults to the current one. */
   helloVersion?: number | null;
   /** Refuse the connection: open, then close without a greeting. */
   refuseConnection?: boolean;
@@ -49,6 +54,8 @@ export class FakeSession {
   /** Every control message the client sent, in order. */
   readonly messages: BridgeClientMessage[] = [];
   statusRequests = 0;
+  /** Job announcements and reports, in order, as the bridge's print log would see them. */
+  readonly jobs: Extract<BridgeClientMessage, { type: 'job' | 'job-done' }>[] = [];
 
   constructor(readonly socket: MockWebSocket) {}
 
@@ -137,7 +144,7 @@ export class FakeBridgeServer {
         return;
       }
       if (this.options.helloVersion !== null) {
-        session.send({ type: 'hello', version: this.options.helloVersion ?? 1 });
+        session.send({ type: 'hello', version: this.options.helloVersion ?? BRIDGE_PROTOCOL_VERSION });
       }
     }, 0);
     return socket;
@@ -227,6 +234,11 @@ export class FakeBridgeServer {
         if (session.printer) this.#busy.delete(session.printer.id);
         session.printer = null;
         session.send({ type: 'closed', reason: 'client' });
+        return;
+      case 'job':
+      case 'job-done':
+        // No reply, like the real bridge; just remembered for assertions.
+        session.jobs.push(message);
         return;
     }
   }

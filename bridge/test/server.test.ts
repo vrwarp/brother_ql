@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { WebSocket } from 'ws';
 
 import { loadConfig } from '../src/config.js';
-import { silentLogger } from '../src/log.js';
+import { createLogger, silentLogger } from '../src/log.js';
 import { createBridgeServer, ensureAdminToken, type BridgeServer } from '../src/server.js';
 import { Store } from '../src/store.js';
 import { hashToken } from '../src/tokens.js';
@@ -27,12 +27,10 @@ describe('ensureAdminToken', () => {
 
   it('generates and logs one on first start, then keeps it', async () => {
     const store = Store.inMemory();
-    const logged: Record<string, unknown>[] = [];
-    const log = (_l: string, _m: string, data?: Record<string, unknown>) => {
-      if (data) logged.push(data);
-    };
+    const log = createLogger({ write: () => {} });
     await ensureAdminToken(loadConfig({}), store, log);
-    const generated = logged.find((d) => typeof d.adminToken === 'string')?.adminToken as string;
+    const generated = log.recent().find((r) => typeof r.data?.adminToken === 'string')?.data
+      ?.adminToken as string;
     expect(generated).toMatch(/^bql_/);
     expect(store.adminTokenHash).toBe(hashToken(generated));
 

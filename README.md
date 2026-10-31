@@ -263,6 +263,21 @@ A non-blocking job always reports `none`. Status queries (`queryStatus`,
 `suggestLabels`) work over the bridge whenever the printer's status mode is not
 `none`, fetched over SNMP or 9100 by the bridge and decoded here unchanged.
 
+**Printer faults reach the client the same way as over USB.** A cover opened,
+media run out or a cutter jam arrives as a `PrinterStatusError` carrying the
+same decoded `errors` flags, whether the packet came through port 9100 or was
+read over SNMP. One difference is worth knowing: a USB printer pushes its
+error packet the moment the fault happens, while an `snmp` printer has to be
+asked, so the library polls it during a transfer as well (every
+`midJobStatusIntervalMs`, 1 s by default; 0 disables it) and a fault mid-job
+aborts the write within about a second, as on USB. A printer in `none` mode
+reports nothing: a job that fails there is invisible to the client. A lost
+poll — one SNMP datagram dropped on Wi-Fi — is retried, not reported.
+
+The transport also tells the bridge what each job is (page count and label)
+and how it ended, which is what the bridge's print log and per-printer
+counters are built from. This costs nothing on USB, which has no such hooks.
+
 Running the bridge, its admin interface, the Docker image and the security
 notes are covered in [`bridge/README.md`](./bridge/README.md).
 

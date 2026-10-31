@@ -72,6 +72,16 @@ export const ADMIN_PAGE = /* html */ `<!doctype html>
     </section>
 
     <section>
+      <h2>Recent prints</h2>
+      <p class="muted" id="totals">No prints yet.</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>When</th><th>Printer</th><th>Token</th><th>Labels</th><th>Size</th><th>Outcome</th><th>Faults</th></tr></thead>
+        <tbody id="jobs"></tbody>
+      </table></div>
+      <p class="muted">The last few jobs, newest first. <em>Labels</em> is what the client reported printing, or the pages it announced if it did not report; a tick means the printer itself confirmed them. <em>Faults</em> counts status packets with an error flag seen during the job. The page refreshes this every few seconds.</p>
+    </section>
+
+    <section>
       <h2>Client tokens</h2>
       <p class="muted">A token is shown once, when it is created. Revoking it disconnects nothing in flight but refuses the next connection.</p>
       <div id="new-token" class="notice hidden"></div>
@@ -89,7 +99,7 @@ export const ADMIN_PAGE = /* html */ `<!doctype html>
       <h2>Printers</h2>
       <p class="muted">Each printer is reached at its host on port 9100. <strong>Status mode</strong> says how the bridge reads the printer's status: <em>snmp</em> for a QL-810W, QL-820NWB or QL-1110NWB (they do not answer status requests on port 9100), <em>tcp</em> for a printer known to answer there, <em>none</em> for fire-and-forget.</p>
       <div class="table-wrap"><table>
-        <thead><tr><th>Name</th><th>Address</th><th>Model</th><th>Status mode</th><th>State</th><th></th></tr></thead>
+        <thead><tr><th>Name</th><th>Address</th><th>Model</th><th>Status mode</th><th>State</th><th>Jobs</th><th>Labels</th><th>Faults</th><th></th></tr></thead>
         <tbody id="printers"></tbody>
       </table></div>
       <form class="row" id="printer-form">
@@ -104,6 +114,12 @@ export const ADMIN_PAGE = /* html */ `<!doctype html>
         <button type="button" id="printer-cancel" class="hidden">Cancel</button>
       </form>
       <div id="probe-result" class="notice hidden"></div>
+    </section>
+
+    <section>
+      <h2>When something goes wrong</h2>
+      <p class="muted">The bundle holds the bridge's configuration (without secrets), its printers and their counters, the recent prints, and the last couple of thousand log records including every frame and status packet — enough to diagnose a problem without reproducing it. Attach it to a bug report.</p>
+      <p class="actions"><button class="primary" id="diagnostics">Download diagnostics</button><button class="danger" id="reset-stats">Reset statistics</button></p>
     </section>
 
     <p class="muted"><button id="signout">Sign out</button></p>
@@ -142,23 +158,72 @@ export const ADMIN_PAGE = /* html */ `<!doctype html>
       : '<tr><td colspan="5" class="muted">No tokens yet. Create one below and paste it into the page that will print.</td></tr>';
   }
 
+  const num = (n) => Number(n || 0).toLocaleString();
+  const size = (b) => b < 1024 ? b + ' B' : b < 1048576 ? (b / 1024).toFixed(1) + ' KiB' : (b / 1048576).toFixed(2) + ' MiB';
+
   async function loadPrinters() {
     const { printers } = await api('GET', '/api/admin/printers');
-    $('printers').innerHTML = printers.length ? printers.map((p) =>
-      '<tr><td>' + esc(p.name) + '</td><td class="mono">' + esc(p.host) + ':' + esc(p.port) + '</td><td>' + esc(p.model || '—') + '</td>' +
+    $('printers').innerHTML = printers.length ? printers.map((p) => {
+      const st = p.stats || {};
+      const labels = num(st.labels) + (st.labelsConfirmed ? ' <span class="muted">(' + num(st.labelsConfirmed) + ' ✓)</span>' : '');
+      const faults = st.jobsWithFaults ? '<span class="warn">' + num(st.jobsWithFaults) + ' job' + (st.jobsWithFaults === 1 ? '' : 's') + '</span>' : '<span class="muted">none</span>';
+      return '<tr><td>' + esc(p.name) + '</td><td class="mono">' + esc(p.host) + ':' + esc(p.port) + '</td><td>' + esc(p.model || '—') + '</td>' +
       '<td><span class="pill">' + esc(p.statusMode) + '</span></td><td>' + (p.busy ? '<span class="warn">printing</span>' : '<span class="ok">idle</span>') + '</td>' +
-      '<td class="actions"><button data-probe="' + esc(p.id) + '">Probe</button><button data-edit="' + esc(p.id) + '">Edit</button><button class="danger" data-delete="' + esc(p.id) + '">Remove</button></td></tr>').join('')
-      : '<tr><td colspan="6" class="muted">No printers yet. Add one below; the bridge needs its address on the network.</td></tr>';
+      '<td>' + num(st.jobs) + '</td><td>' + labels + '</td><td>' + faults + '</td>' +
+      '<td class="actions"><button data-probe="' + esc(p.id) + '">Probe</button><button data-edit="' + esc(p.id) + '">Edit</button><button class="danger" data-delete="' + esc(p.id) + '">Remove</button></td></tr>';
+    }).join('')
+      : '<tr><td colspan="9" class="muted">No printers yet. Add one below; the bridge needs its address on the network.</td></tr>';
     $('printers').dataset.records = JSON.stringify(printers);
+  }
+
+  const OUTCOME = { printed: ['ok', 'printed'], sent: ['muted', 'sent'], failed: ['bad', 'failed'], error: ['bad', 'socket error'], 'printer-closed': ['warn', 'printer hung up'], disconnected: ['warn', 'client left'] };
+
+  async function loadJobs() {
+    const [{ jobs }, { stats }] = await Promise.all([api('GET', '/api/admin/jobs'), api('GET', '/api/admin/stats')]);
+    $('jobs').innerHTML = jobs.length ? jobs.map((j) => {
+      const [cls, word] = OUTCOME[j.outcome] || ['muted', j.outcome];
+      const labels = j.pagesPrinted !== null && j.pagesPrinted !== undefined
+        ? num(j.pagesPrinted) + (j.confirmation && j.confirmation !== 'none' ? ' ✓' : '')
+        : j.completions ? num(j.completions) + ' ✓' : j.pages !== null && j.pages !== undefined ? num(j.pages) : '—';
+      const faults = j.faults && j.faults.length ? '<span class="bad">' + j.faults.length + '</span>' : '<span class="muted">0</span>';
+      const title = esc(j.message || '') + (j.label ? ' label ' + esc(j.label) : '') + ' session ' + esc(j.session);
+      return '<tr title="' + title + '"><td>' + esc(when(j.finishedAt)) + '</td><td>' + esc(j.printerName) + '</td><td>' + esc(j.token) + '</td><td>' + labels + '</td><td>' + esc(size(j.bytes)) + ' <span class="muted">/ ' + num(j.frames) + ' frames</span></td>' +
+        '<td><span class="' + cls + '">' + esc(word) + '</span>' + (j.message ? ' <span class="muted">' + esc(j.message) + '</span>' : '') + '</td><td>' + faults + '</td></tr>';
+    }).join('') : '<tr><td colspan="7" class="muted">Nothing has been printed through the bridge yet.</td></tr>';
+    const all = Object.values(stats || {});
+    const total = (k) => all.reduce((n, s) => n + (s[k] || 0), 0);
+    $('totals').textContent = all.length
+      ? 'All time: ' + num(total('jobs')) + ' jobs, ' + num(total('labels')) + ' labels (' + num(total('labelsConfirmed')) + ' confirmed by the printer), ' + num(total('jobsWithFaults')) + ' jobs with faults, ' + size(total('bytes')) + ' relayed.'
+      : 'No prints yet.';
   }
 
   function fail(error) { alert(error.message || String(error)); }
 
+  let refresh = null;
   async function signedIn() {
     $('login').classList.add('hidden');
     $('app').classList.remove('hidden');
-    await Promise.all([loadTokens(), loadPrinters()]).catch(fail);
+    await Promise.all([loadTokens(), loadPrinters(), loadJobs()]).catch(fail);
+    if (!refresh) refresh = setInterval(() => { if (token) Promise.all([loadJobs(), loadPrinters()]).catch(() => {}); }, 5000);
   }
+
+  $('diagnostics').addEventListener('click', async () => {
+    try {
+      const res = await fetch('/api/admin/diagnostics', { headers: { authorization: 'Bearer ' + token } });
+      if (!res.ok) throw new Error(res.status + ' ' + res.statusText);
+      const name = (res.headers.get('content-disposition') || '').match(/filename="([^"]+)"/);
+      const url = URL.createObjectURL(await res.blob());
+      const a = document.createElement('a');
+      a.href = url; a.download = name ? name[1] : 'brother-ql-bridge-diagnostics.json';
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (error) { fail(error); }
+  });
+
+  $('reset-stats').addEventListener('click', async () => {
+    if (!confirm('Forget all counters and the recent prints list?')) return;
+    try { await api('DELETE', '/api/admin/stats'); await Promise.all([loadJobs(), loadPrinters()]); } catch (error) { fail(error); }
+  });
 
   $('login-form').addEventListener('submit', async (e) => {
     e.preventDefault();

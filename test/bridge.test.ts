@@ -126,8 +126,8 @@ describe('protocol parsing', () => {
     expect(parseServerMessage('{"type":"ack","bytes":3}')).toEqual({ type: 'ack', bytes: 3 });
   });
 
-  it('is at version 1', () => {
-    expect(BRIDGE_PROTOCOL_VERSION).toBe(1);
+  it('is at version 2', () => {
+    expect(BRIDGE_PROTOCOL_VERSION).toBe(2);
   });
 });
 
@@ -922,5 +922,145 @@ describe('printer over the bridge', () => {
   it('a MockWebSocket refuses to send when not open', () => {
     const socket = new MockWebSocket('ws://x', bridge());
     expect(() => socket.send('x')).toThrow(/not open/);
+  });
+});
+
+describe('job announcements and reports', () => {
+  const printerOptions = { model: 'QL-810W', statusPollIntervalMs: 1 } as const;
+
+  it('tells the bridge what a print is and how it ended', async () => {
+    const server = bridge({ statusScript: [POLL_PRINTING, POLL_WAITING] });
+    const printer = new BrotherQLPrinter(transport(server), printerOptions);
+    await printer.open();
+    await printer.print([image(), image()], { label: '62' });
+    await settle(); // the report is fire-and-forget; let the frame land
+    expect(server.last.jobs).toEqual([
+      { type: 'job', pages: 2, label: '62' },
+      { type: 'job-done', pagesPrinted: 2, confirmation: 'phase' },
+    ]);
+  });
+
+  it('announces a raw job by page count alone and reports a non-blocking send as unconfirmed', async () => {
+    const server = bridge();
+    const printer = new BrotherQLPrinter(transport(server), printerOptions);
+    await printer.open();
+    await printer.sendRaw(new Uint8Array(10), { pageCount: 3, nonBlocking: true });
+    await settle();
+    expect(server.last.jobs).toEqual([
+      { type: 'job', pages: 3 },
+      { type: 'job-done', pagesPrinted: 0, confirmation: 'none' },
+    ]);
+  });
+
+  it('reports a failure with the error named', async () => {
+    const server = bridge({ statusScript: [POLL_PRINTING, POLL_ERROR] });
+    const printer = new BrotherQLPrinter(transport(server), printerOptions);
+    await printer.open();
+    await expect(printer.print(image(), { label: '62' })).rejects.toBeInstanceOf(PrinterStatusError);
+    await settle();
+    const done = server.last.jobs.find((m) => m.type === 'job-done');
+    expect(done).toMatchObject({ type: 'job-done', pagesPrinted: 0, confirmation: 'none' });
+    expect((done as { error?: string }).error).toMatch(/^PrinterStatusError: /);
+  });
+
+  it('a hook that throws does not fail the job', async () => {
+    const server = bridge({ statusScript: [POLL_WAITING] });
+    const t = transport(server);
+    t.beginJob = () => {
+      throw new Error('hook broke');
+    };
+    const diagnostics = new DiagnosticsRecorder();
+    const printer = new BrotherQLPrinter(t, { ...printerOptions, diagnostics });
+    await printer.open();
+    const result = await printer.print(image(), { label: '62' });
+    expect(result.confirmation).toBe('phase');
+    expect(diagnostics.events().some((e) => e.name === 'hook-failed')).toBe(true);
+    // Nothing announced, so nothing reported either.
+    expect(server.last.jobs).toEqual([]);
+  });
+
+  it('says nothing over a transport without the hooks', async () => {
+    const device = new MockUsbDevice({ readScript: [] });
+    const printer = new BrotherQLPrinterCore(device, { model: 'QL-810W' });
+    await printer.open();
+    await printer.sendRaw(new Uint8Array(4), { nonBlocking: true });
+    // Reaching here is the assertion: no hook, no error.
+    await printer.close();
+  });
+});
+
+describe('mid-job status polling on a polled transport', () => {
+  const big = (): RawImage => image(696, 900);
+
+  it('stops a long job early when a poll during the transfer reports a fault', async () => {
+    const server = bridge({ statusScript: [POLL_ERROR], ackDelayMs: 2 });
+    const printer = new BrotherQLPrinter(transport(server, 'ql810w', { chunkSize: 256 }), {
+      model: 'QL-810W',
+      statusPollIntervalMs: 1,
+      midJobStatusIntervalMs: 1,
+    });
+    await printer.open();
+    const attempt = printer.print(big(), { label: '62' });
+    await expect(attempt).rejects.toBeInstanceOf(PrinterStatusError);
+    await settle();
+    const frames = server.last.written;
+    // Most of the job was never sent, and the cancel sequence followed it —
+    // itself split over two frames at this chunk size.
+    expect(frames.length).toBeLessThan(10);
+    const all = server.last.bytesWritten;
+    expect(Array.from(all.subarray(all.length - 2))).toEqual([0x1b, 0x40]);
+    expect(all.subarray(all.length - 402, all.length - 2).every((b) => b === 0)).toBe(true);
+  });
+
+  it('ignores a transient fetch failure mid-job and still finishes', async () => {
+    const server = bridge({ statusScript: ['fail', POLL_PRINTING, 'fail', POLL_WAITING], ackDelayMs: 1 });
+    const diagnostics = new DiagnosticsRecorder();
+    const printer = new BrotherQLPrinter(transport(server, 'ql810w', { chunkSize: 512 }), {
+      model: 'QL-810W',
+      statusPollIntervalMs: 1,
+      midJobStatusIntervalMs: 1,
+      diagnostics,
+    });
+    await printer.open();
+    const result = await printer.print(big(), { label: '62', statusTimeoutMs: 3000 });
+    expect(result.confirmation).toBe('phase');
+    expect(diagnostics.events().some((e) => e.name === 'poll-failed' && e.data?.during === 'send')).toBe(true);
+  });
+
+  it('can be switched off, in which case the fault surfaces only afterwards', async () => {
+    const server = bridge({ statusScript: [POLL_ERROR], ackDelayMs: 1 });
+    const printer = new BrotherQLPrinter(transport(server, 'ql810w', { chunkSize: 256 }), {
+      model: 'QL-810W',
+      statusPollIntervalMs: 1,
+      midJobStatusIntervalMs: 0,
+    });
+    await printer.open();
+    await expect(printer.print(big(), { label: '62' })).rejects.toBeInstanceOf(PrinterStatusError);
+    // Every frame went out before the completion poll found the fault.
+    const sent = server.last.written.filter((f) => f.length !== 402).reduce((n, f) => n + f.length, 0);
+    expect(sent).toBeGreaterThan(50_000);
+  });
+
+  it('does not poll a transport that confirms pages on its own', async () => {
+    const server = bridge({
+      onPrinterData: (bytes, session) => {
+        if (bytes.length < 16 * 1024 && bytes.length !== 3) {
+          session.emit(STATUS_COMPLETED);
+          session.emit(STATUS_PHASE_WAITING);
+        }
+      },
+    });
+    const printer = new BrotherQLPrinter(transport(server, 'ql1110'), {
+      model: 'QL-1110NWB',
+      midJobStatusIntervalMs: 1,
+    });
+    await printer.open();
+    await printer.print(image(1164, 300), { label: '102' });
+    expect(server.last.statusRequests).toBe(0);
+  });
+
+  it('validates the interval', () => {
+    const t = transport(bridge());
+    expect(() => new BrotherQLPrinterCore(t, { midJobStatusIntervalMs: -5 })).toThrow(RangeError);
   });
 });

@@ -11,6 +11,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 
+import { applyJob, emptyStats, type JobRecord, type PrinterStats } from './jobs.js';
 import type { BridgeStatusMode } from './protocol.js';
 import { STATUS_MODES } from './protocol.js';
 
@@ -43,12 +44,16 @@ export interface State {
   adminTokenHash?: string;
   tokens: TokenRecord[];
   printers: PrinterRecord[];
+  /** The most recent finished print jobs, newest first. */
+  jobs: JobRecord[];
+  /** Per-printer counters, by printer id. */
+  stats: Record<string, PrinterStats>;
 }
 
 export const STATE_FILE = 'bridge.json';
 
 function emptyState(): State {
-  return { version: 1, tokens: [], printers: [] };
+  return { version: 1, tokens: [], printers: [], jobs: [], stats: {} };
 }
 
 /** What an administrator supplies to add or edit a printer. */
@@ -153,10 +158,13 @@ export class Store {
     if (parsed.version !== 1 || !Array.isArray(parsed.tokens) || !Array.isArray(parsed.printers)) {
       throw new Error('bridge.json is not a state file this version understands.');
     }
+    // Files written before jobs and stats existed lack both; start them empty.
     const state: State = {
       version: 1,
       tokens: parsed.tokens,
       printers: parsed.printers,
+      jobs: Array.isArray(parsed.jobs) ? parsed.jobs : [],
+      stats: parsed.stats && typeof parsed.stats === 'object' ? parsed.stats : {},
     };
     if (parsed.adminTokenHash) state.adminTokenHash = parsed.adminTokenHash;
     return state;
@@ -178,6 +186,33 @@ export class Store {
 
   get printers(): readonly PrinterRecord[] {
     return this.#state.printers;
+  }
+
+  get jobs(): readonly JobRecord[] {
+    return this.#state.jobs;
+  }
+
+  get stats(): Readonly<Record<string, PrinterStats>> {
+    return this.#state.stats;
+  }
+
+  statsFor(printerId: string): PrinterStats {
+    return this.#state.stats[printerId] ?? emptyStats();
+  }
+
+  /** Keep a finished job, newest first and capped at `max`, and fold it into its printer's counters. */
+  async recordJob(job: JobRecord, max: number): Promise<void> {
+    this.#state.jobs.unshift(job);
+    if (this.#state.jobs.length > max) this.#state.jobs.length = Math.max(0, max);
+    this.#state.stats[job.printerId] = applyJob(this.statsFor(job.printerId), job);
+    await this.#save();
+  }
+
+  /** Forget every job and counter. */
+  async resetStats(): Promise<void> {
+    this.#state.jobs = [];
+    this.#state.stats = {};
+    await this.#save();
   }
 
   async setAdminTokenHash(hash: string): Promise<void> {
@@ -241,6 +276,7 @@ export class Store {
     const before = this.#state.printers.length;
     this.#state.printers = this.#state.printers.filter((printer) => printer.id !== id);
     if (this.#state.printers.length === before) return false;
+    delete this.#state.stats[id];
     await this.#save();
     return true;
   }

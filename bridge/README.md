@@ -89,6 +89,41 @@ The page follows the system colour scheme and fits a phone. The screenshots
 are regenerated with `node scripts/screenshots.mjs` after `npm run build`
 (needs Playwright on the path).
 
+## The print log and statistics
+
+The dashboard's **Recent prints** card lists the last few jobs (five by
+default, `RECENT_JOBS`), newest first: when, which printer, which token, how
+many labels, how big, how it ended, and whether the printer reported a fault
+while it ran. The printers table carries all-time counters per printer — jobs,
+labels (with how many the printer itself confirmed) and jobs with faults — and
+the card's first line sums them.
+
+The bridge never looks inside a job, so it learns what a burst of frames was
+from the client: the library announces each job (page count and label) before
+writing it and reports afterwards how it ended and how it knew. The bridge
+counts bytes and frames itself and notes every status packet that passes
+through, which is where faults show up whichever way they travelled. A client
+that announces nothing still gets a record, ending when it closes the printer
+or its frames go quiet (`JOB_IDLE_MS`), with the page count unknown.
+
+**Reset statistics** forgets the counters and the list.
+
+## When something goes wrong
+
+Every log line carries the connection's short session id and, once a printer
+is open, its name, so one connection's story can be pulled out of a transcript
+by id. Frames, acknowledgements and relayed bytes are logged at `debug`, with
+the hex of every status packet. The in-memory buffer keeps every level
+(`LOG_BUFFER` records, 2000 by default) regardless of what stdout gets
+(`LOG_LEVEL`, `info` by default), so the detail is there after the fact
+without anyone having to turn verbose logging on and reproduce the problem.
+
+**Download diagnostics** on the dashboard (or `GET /api/admin/diagnostics`
+with the admin token) saves one JSON file holding the bridge's version and
+uptime, its configuration with secrets left out, the printers and their
+counters, the recent prints, the token names, and that log buffer. Attach it
+to a bug report; it is what a maintainer needs to see what happened.
+
 ## Configuration
 
 All via environment variables; the defaults suit the container.
@@ -104,6 +139,10 @@ All via environment variables; the defaults suit the container.
 | `AUTH_TIMEOUT_MS` | `10000` | How long a connection may stay unauthenticated. |
 | `CONNECT_TIMEOUT_MS` | `5000` | How long to wait for a printer's port 9100 to accept. |
 | `SNMP_TIMEOUT_MS` | `2000` | How long to wait for an SNMP answer. |
+| `LOG_LEVEL` | `info` | Lowest level written to stdout (`debug`, `info`, `warn`, `error`). The diagnostics buffer keeps every level. |
+| `LOG_BUFFER` | `2000` | Log records kept in memory for the diagnostics bundle. |
+| `RECENT_JOBS` | `5` | Finished print jobs kept and shown on the dashboard. |
+| `JOB_IDLE_MS` | `3000` | Quiet time after which a job the client never reported on counts as sent. |
 
 ## Security notes
 
@@ -151,17 +190,19 @@ completion is reported over the network, which differs from USB.
 
 Control messages are JSON text frames; printer data is binary frames. The shape
 is defined in `src/protocol.ts` here and mirrored in the library's
-`src/bridge/protocol.ts`; `BRIDGE_PROTOCOL_VERSION` (currently 1) is sent in the
+`src/bridge/protocol.ts`; `BRIDGE_PROTOCOL_VERSION` (currently 2) is sent in the
 `hello` frame and checked by the client. A session is: `hello` → `auth` →
-`auth-ok` → `open` → `opened` → binary frames each answered by `ack`, with
-`status` fetching a status block, until `close` or the socket drops.
+`auth-ok` → `open` → `opened` → `job` → binary frames each answered by `ack`,
+with `status` fetching a status block → `job-done`, until `close` or the
+socket drops. `job` and `job-done` carry the page count and the outcome for
+the print log and get no reply.
 
 ## Development
 
 ```bash
 npm ci
 npm run typecheck
-npm test          # ~100 tests: SNMP codec, store, HTTP admin API, the relay end to end,
-                  # and the relay under a slow, lossy printer connection
+npm test          # ~130 tests: SNMP codec, store, print log, HTTP admin API, the
+                  # relay end to end, and the relay under a slow, lossy printer link
 npm run build
 ```

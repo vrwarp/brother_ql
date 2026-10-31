@@ -14,6 +14,27 @@ describe('parseClientMessage', () => {
     expect(parseClientMessage('{"type":"list"}')).toEqual({ type: 'list' });
     expect(parseClientMessage('{"type":"status"}')).toEqual({ type: 'status' });
     expect(parseClientMessage('{"type":"close"}')).toEqual({ type: 'close' });
+    expect(parseClientMessage('{"type":"job","pages":2,"label":"62"}')).toEqual({ type: 'job', pages: 2, label: '62' });
+    expect(parseClientMessage('{"type":"job","pages":1}')).toEqual({ type: 'job', pages: 1 });
+    expect(parseClientMessage('{"type":"job-done","pagesPrinted":2,"confirmation":"phase"}')).toEqual({
+      type: 'job-done',
+      pagesPrinted: 2,
+      confirmation: 'phase',
+    });
+    expect(parseClientMessage('{"type":"job-done","pagesPrinted":0,"confirmation":"none","error":"x"}')).toEqual({
+      type: 'job-done',
+      pagesPrinted: 0,
+      confirmation: 'none',
+      error: 'x',
+    });
+  });
+
+  it('rejects malformed job messages', () => {
+    expect(parseClientMessage('{"type":"job"}')).toBeNull();
+    expect(parseClientMessage('{"type":"job","pages":-1}')).toBeNull();
+    expect(parseClientMessage('{"type":"job","pages":1.5}')).toBeNull();
+    expect(parseClientMessage('{"type":"job-done","pagesPrinted":1}')).toBeNull();
+    expect(parseClientMessage('{"type":"job-done","pagesPrinted":1,"confirmation":"maybe"}')).toBeNull();
   });
 
   it('rejects malformed or mistyped frames', () => {
@@ -28,8 +49,8 @@ describe('parseClientMessage', () => {
     expect(parseClientMessage('{}')).toBeNull();
   });
 
-  it('is version 1 with the three status modes', () => {
-    expect(BRIDGE_PROTOCOL_VERSION).toBe(1);
+  it('is version 2 with the three status modes', () => {
+    expect(BRIDGE_PROTOCOL_VERSION).toBe(2);
     expect(STATUS_MODES).toEqual(['snmp', 'tcp', 'none']);
   });
 });

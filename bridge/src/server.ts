@@ -59,7 +59,8 @@ export function createBridgeServer(options: BridgeServerOptions): BridgeServer {
   const { config, store, log } = options;
   const locks = new PrinterLocks();
 
-  const handler = createHttpHandler({ config, store, locks, log, probe: options.probe });
+  const startedAt = new Date();
+  const handler = createHttpHandler({ config, store, locks, log, probe: options.probe, startedAt });
   const server: HttpServer =
     config.tlsCertFile && config.tlsKeyFile
       ? createHttpsServer(
@@ -76,6 +77,8 @@ export function createBridgeServer(options: BridgeServerOptions): BridgeServer {
     authTimeoutMs: config.authTimeoutMs,
     connectTimeoutMs: config.connectTimeoutMs,
     snmpTimeoutMs: config.snmpTimeoutMs,
+    recentJobs: config.recentJobs,
+    jobIdleMs: config.jobIdleMs,
     snmpGet: options.snmpGet,
   };
 
@@ -95,8 +98,8 @@ export function createBridgeServer(options: BridgeServerOptions): BridgeServer {
     }
     wss.handleUpgrade(req, socket, head, (ws) => {
       const remote = `${req.socket.remoteAddress ?? '?'}:${req.socket.remotePort ?? '?'}`;
-      log('info', 'client connected', { remote, origin });
-      new ClientSession(ws, sessionContext, remote);
+      const session = new ClientSession(ws, sessionContext, remote);
+      if (origin) log('debug', 'client origin', { session: session.id, origin });
     });
   });
 

@@ -12,13 +12,20 @@
  * The bridge holds a lock per printer, so two clients cannot interleave jobs
  * on one socket. Everything a session holds is released when the socket
  * closes, however it closes.
+ *
+ * Every log line carries the session's short id and, once open, the printer,
+ * so a transcript of one connection can be pulled out of the diagnostics
+ * bundle by id. Frames and relayed bytes are logged at `debug`, which the
+ * in-memory buffer keeps even when stdout does not.
  */
 
+import { randomBytes } from 'node:crypto';
 import { connect, type Socket } from 'node:net';
 
 import type { WebSocket } from 'ws';
 
-import type { Logger } from './log.js';
+import { JobTracker, type JobMeta } from './jobs.js';
+import { hex, type Logger, type LogLevel } from './log.js';
 import {
   BRIDGE_PROTOCOL_VERSION,
   parseClientMessage,
@@ -27,6 +34,7 @@ import {
   type BridgeServerMessage,
 } from './protocol.js';
 import { BROTHER_STATUS_OID, snmpGet } from './snmp.js';
+import { isStatusPacket, summarizeStatus } from './status.js';
 import type { PrinterRecord, Store, TokenRecord } from './store.js';
 import { tokenMatches } from './tokens.js';
 
@@ -58,6 +66,10 @@ export interface SessionContext {
   authTimeoutMs: number;
   connectTimeoutMs: number;
   snmpTimeoutMs: number;
+  /** How many finished jobs the store keeps. */
+  recentJobs: number;
+  /** Frames quiet for this long end an unreported job. */
+  jobIdleMs: number;
   /** Replaceable for tests. */
   snmpGet?: typeof snmpGet;
 }
@@ -76,9 +88,12 @@ export function describePrinter(record: PrinterRecord, locks: PrinterLocks): Bri
 }
 
 export class ClientSession {
+  /** Short random id, the handle for this connection in the log. */
+  readonly id = randomBytes(4).toString('hex');
   readonly #ws: WebSocket;
   readonly #ctx: SessionContext;
   readonly #remote: string;
+  readonly #jobs: JobTracker;
   #token: TokenRecord | null = null;
   #printer: PrinterRecord | null = null;
   #socket: Socket | null = null;
@@ -91,6 +106,27 @@ export class ClientSession {
     this.#ws = ws;
     this.#ctx = ctx;
     this.#remote = remote;
+    this.#jobs = new JobTracker({
+      idleMs: ctx.jobIdleMs,
+      onEnd: (job) => {
+        this.#log(job.faults.length > 0 || job.outcome === 'failed' ? 'warn' : 'info', 'job ended', {
+          job: job.id,
+          outcome: job.outcome,
+          pages: job.pages,
+          pagesPrinted: job.pagesPrinted,
+          confirmation: job.confirmation,
+          completions: job.completions,
+          bytes: job.bytes,
+          frames: job.frames,
+          ms: job.durationMs,
+          faults: job.faults.length,
+          ...(job.message ? { message: job.message } : {}),
+        });
+        void ctx.store.recordJob(job, ctx.recentJobs).catch((error: unknown) => {
+          this.#log('error', 'could not save job', { error: String(error) });
+        });
+      },
+    });
 
     ws.on('message', (data, isBinary) => {
       if (isBinary) {
@@ -99,23 +135,32 @@ export class ClientSession {
         this.#onText(toBuffer(data).toString('utf8'));
       }
     });
-    ws.on('close', () => this.#teardown('socket'));
-    ws.on('error', (error) => {
-      this.#ctx.log('warn', 'websocket error', { remote: this.#remote, error: error.message });
-    });
+    ws.on('close', (code, reason) => this.#teardown('socket', { code, reason: reason.toString() }));
+    ws.on('error', (error) => this.#log('warn', 'websocket error', { error: error.message }));
 
     this.#authTimer = setTimeout(() => {
       if (!this.#token) {
-        this.#ctx.log('info', 'closing unauthenticated connection', { remote: this.#remote });
+        this.#log('info', 'closing unauthenticated connection', {});
         this.#ws.close(4401, 'authentication timeout');
       }
     }, ctx.authTimeoutMs);
 
+    this.#log('info', 'client connected', {});
     this.#send({ type: 'hello', version: BRIDGE_PROTOCOL_VERSION });
   }
 
   get printerId(): string | null {
     return this.#printer?.id ?? null;
+  }
+
+  #log(level: LogLevel, message: string, data: Record<string, unknown>): void {
+    this.#ctx.log(level, message, {
+      session: this.id,
+      remote: this.#remote,
+      ...(this.#token ? { token: this.#token.name } : {}),
+      ...(this.#printer ? { printer: this.#printer.name } : {}),
+      ...data,
+    });
   }
 
   #send(message: BridgeServerMessage): void {
@@ -129,11 +174,38 @@ export class ClientSession {
   }
 
   #error(code: BridgeErrorCode, message: string): void {
+    this.#log('warn', 'refused', { code, message });
     this.#send({ type: 'error', code, message });
   }
 
   #printers(): BridgePrinterInfo[] {
     return this.#ctx.store.printers.map((record) => describePrinter(record, this.#ctx.locks));
+  }
+
+  #meta(): JobMeta | null {
+    if (!this.#printer || !this.#token) return null;
+    return {
+      session: this.id,
+      printerId: this.#printer.id,
+      printerName: this.#printer.name,
+      token: this.#token.name,
+    };
+  }
+
+  /** Note a status packet that passed through, for the job log. */
+  #sawStatus(bytes: Uint8Array, via: 'tcp' | 'snmp'): void {
+    if (!isStatusPacket(bytes)) return;
+    const summary = summarizeStatus(bytes);
+    this.#jobs.status(summary);
+    this.#log(summary.hasErrors || summary.statusType === 'error' ? 'warn' : 'debug', 'status', {
+      via,
+      statusType: summary.statusType,
+      phase: summary.phase,
+      errorInfo: summary.errorInfo,
+      mediaWidthMm: summary.mediaWidthMm,
+      mediaType: summary.mediaType,
+      hex: summary.hex,
+    });
   }
 
   #onText(text: string): void {
@@ -163,6 +235,21 @@ export class ClientSession {
       case 'close':
         this.#closePrinter('client');
         return;
+      case 'job': {
+        const meta = this.#meta();
+        if (!meta || !this.#socket) {
+          this.#error('not-open', 'Open a printer before announcing a job.');
+          return;
+        }
+        this.#jobs.announce(meta, message.pages, message.label);
+        this.#log('info', 'job announced', { pages: message.pages, label: message.label });
+        return;
+      }
+      case 'job-done': {
+        const job = this.#jobs.report(message.pagesPrinted, message.confirmation, message.error);
+        if (!job) this.#log('debug', 'job report with no job in flight', { ...message });
+        return;
+      }
     }
   }
 
@@ -173,8 +260,8 @@ export class ClientSession {
     }
     const record = this.#ctx.store.tokens.find((candidate) => tokenMatches(token, candidate.hash));
     if (!record) {
-      this.#ctx.log('info', 'rejected token', { remote: this.#remote });
-      this.#error('unauthorized', 'Unknown token.');
+      this.#log('warn', 'rejected token', { hint: token.slice(0, 12) });
+      this.#send({ type: 'error', code: 'unauthorized', message: 'Unknown token.' });
       this.#ws.close(4401, 'unauthorized');
       return;
     }
@@ -182,7 +269,7 @@ export class ClientSession {
     if (this.#authTimer) clearTimeout(this.#authTimer);
     this.#authTimer = null;
     void this.#ctx.store.touchToken(record.id);
-    this.#ctx.log('info', 'client authenticated', { remote: this.#remote, token: record.name });
+    this.#log('info', 'client authenticated', {});
     this.#send({ type: 'auth-ok', printers: this.#printers() });
   }
 
@@ -202,6 +289,12 @@ export class ClientSession {
     }
     this.#printer = record;
     this.#closingByClient = false;
+    const started = Date.now();
+    this.#log('info', 'connecting to printer', {
+      host: record.host,
+      port: record.port,
+      statusMode: record.statusMode,
+    });
 
     const socket = connect({ host: record.host, port: record.port });
     this.#socket = socket;
@@ -214,42 +307,38 @@ export class ClientSession {
       // The connect timeout has done its job; a job may take as long as it
       // takes, and the client has its own per-frame deadline.
       socket.setTimeout(0);
-      this.#ctx.log('info', 'printer opened', {
-        remote: this.#remote,
-        printer: record.name,
-        host: record.host,
-        port: record.port,
-      });
+      this.#log('info', 'printer opened', { ms: Date.now() - started });
       this.#send({ type: 'opened', printer: describePrinter(record, this.#ctx.locks) });
     });
     socket.on('timeout', () => {
       if (!connected) socket.destroy(new Error('ETIMEDOUT'));
     });
-    socket.on('data', (chunk: Buffer) => this.#sendBinary(chunk));
+    socket.on('data', (chunk: Buffer) => {
+      this.#log('debug', 'printer sent', { bytes: chunk.length, hex: hex(chunk) });
+      this.#sawStatus(chunk, 'tcp');
+      this.#sendBinary(chunk);
+    });
     socket.on('error', (error: NodeJS.ErrnoException) => {
+      const code = error.code ?? error.message;
       if (!connected) {
-        this.#ctx.log('warn', 'printer connect failed', {
-          remote: this.#remote,
-          printer: record.name,
-          error: error.code ?? error.message,
-        });
+        this.#log('warn', 'printer connect failed', { error: code, ms: Date.now() - started });
         this.#releasePrinter();
-        this.#error('connect-failed', `Could not connect to ${record.host}:${record.port}: ${error.code ?? error.message}.`);
+        this.#error('connect-failed', `Could not connect to ${record.host}:${record.port}: ${code}.`);
         return;
       }
-      this.#ctx.log('warn', 'printer socket error', {
-        remote: this.#remote,
-        printer: record.name,
-        error: error.code ?? error.message,
-      });
+      this.#log('warn', 'printer socket error', { error: code });
+      this.#jobs.end('error', code);
       this.#releasePrinter();
-      this.#send({ type: 'closed', reason: 'error', message: error.code ?? error.message });
+      this.#send({ type: 'closed', reason: 'error', message: code });
     });
     socket.on('close', () => {
       if (this.#socket !== socket) return; // already reported and released
+      if (!this.#closingByClient) {
+        this.#log('info', 'printer closed the connection', {});
+        this.#jobs.end('printer-closed');
+      }
       this.#releasePrinter();
       if (!this.#closingByClient) {
-        this.#ctx.log('info', 'printer closed the connection', { remote: this.#remote, printer: record.name });
         this.#send({ type: 'closed', reason: 'printer', message: 'The printer closed the connection.' });
       }
     });
@@ -261,15 +350,21 @@ export class ClientSession {
       this.#error('unauthorized', 'Authenticate first.');
       return;
     }
-    if (!socket || !this.#printer || socket.connecting) {
+    const meta = this.#meta();
+    if (!socket || !meta || socket.connecting) {
       this.#error('not-open', 'Open a printer before sending data.');
       return;
     }
+    const started = Date.now();
     socket.write(bytes, (error) => {
       if (error) {
-        this.#error('write-failed', `Writing to the printer failed: ${(error as NodeJS.ErrnoException).code ?? error.message}.`);
+        const code = (error as NodeJS.ErrnoException).code ?? error.message;
+        this.#log('warn', 'write to printer failed', { bytes: bytes.length, error: code });
+        this.#error('write-failed', `Writing to the printer failed: ${code}.`);
         return;
       }
+      this.#jobs.frame(meta, bytes.length);
+      this.#log('debug', 'frame', { bytes: bytes.length, ms: Date.now() - started });
       this.#send({ type: 'ack', bytes: bytes.length });
     });
   }
@@ -285,6 +380,7 @@ export class ClientSession {
       this.#error('bad-request', 'A status request is already in progress.');
       return;
     }
+    const started = Date.now();
     switch (printer.statusMode) {
       case 'none':
         this.#error('status-unavailable', `${printer.name} is registered without a status path.`);
@@ -294,6 +390,7 @@ export class ClientSession {
           if (error) {
             this.#error('status-failed', `Writing the status request failed: ${error.message}.`);
           } else {
+            this.#log('debug', 'status requested', { via: 'tcp' });
             this.#send({ type: 'status-sent' });
           }
         });
@@ -311,11 +408,14 @@ export class ClientSession {
           // Still the same printer on the same connection? A close in the
           // meantime makes the answer moot.
           if (this.#printer !== printer) return;
+          this.#log('debug', 'status fetched', { via: 'snmp', ms: Date.now() - started, bytes: value.length });
+          this.#sawStatus(value, 'snmp');
           this.#sendBinary(value);
           this.#send({ type: 'status-sent' });
         } catch (error) {
           if (this.#printer !== printer) return;
-          this.#error('status-failed', (error as Error).message);
+          this.#log('warn', 'status fetch failed', { via: 'snmp', ms: Date.now() - started, error: (error as Error).message });
+          this.#send({ type: 'error', code: 'status-failed', message: (error as Error).message });
         } finally {
           this.#statusInFlight = false;
         }
@@ -331,6 +431,8 @@ export class ClientSession {
     }
     this.#closingByClient = true;
     const socket = this.#socket;
+    this.#jobs.end('sent');
+    this.#log('info', 'printer closed by client', {});
     this.#releasePrinter();
     socket.destroy();
     this.#send({ type: 'closed', reason });
@@ -345,17 +447,13 @@ export class ClientSession {
     if (socket && !socket.destroyed) socket.destroy();
   }
 
-  #teardown(why: string): void {
+  #teardown(why: string, data: Record<string, unknown>): void {
     if (this.#authTimer) clearTimeout(this.#authTimer);
     this.#authTimer = null;
-    const hadPrinter = this.#printer?.name;
+    this.#log('info', 'client disconnected', { why, ...data });
     this.#closingByClient = true;
+    this.#jobs.dispose();
     this.#releasePrinter();
-    this.#ctx.log('info', 'client disconnected', {
-      remote: this.#remote,
-      why,
-      ...(hadPrinter ? { printer: hadPrinter } : {}),
-    });
   }
 }
 

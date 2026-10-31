@@ -9,10 +9,24 @@
 
 export const STATUS_PACKET_LENGTH = 32;
 
+export type StatusType = 'reply' | 'completed' | 'error' | 'notification' | 'phase-change' | 'unknown';
+
+const STATUS_TYPES: Readonly<Record<number, StatusType>> = {
+  0x00: 'reply',
+  0x01: 'completed',
+  0x02: 'error',
+  0x05: 'notification',
+  0x06: 'phase-change',
+};
+
 export interface StatusSummary {
   /** Hex of the raw packet, for the client-side decoder or a bug report. */
   hex: string;
   modelCode: number;
+  /** Byte 18: what kind of packet this is. */
+  statusType: StatusType;
+  /** The two error information bytes, raw; the client decodes them by name. */
+  errorInfo: [number, number];
   mediaWidthMm: number;
   mediaLengthMm: number;
   mediaType: 'none' | 'continuous' | 'die-cut' | 'unknown';
@@ -35,6 +49,8 @@ export function summarizeStatus(bytes: Uint8Array): StatusSummary {
   return {
     hex: Array.from(bytes, (b) => b.toString(16).padStart(2, '0').toUpperCase()).join(' '),
     modelCode: bytes[4]!,
+    statusType: STATUS_TYPES[bytes[18]!] ?? 'unknown',
+    errorInfo: [bytes[8]!, bytes[9]!],
     mediaWidthMm: bytes[10]!,
     mediaLengthMm: bytes[17]!,
     mediaType:

@@ -15,7 +15,7 @@
  */
 
 /** Bumped when a message changes shape or meaning. */
-export const BRIDGE_PROTOCOL_VERSION = 1;
+export const BRIDGE_PROTOCOL_VERSION = 2;
 
 /**
  * How a registered printer's status can be read.
@@ -55,13 +55,23 @@ export type BridgeErrorCode =
   | 'status-failed'
   | 'write-failed';
 
+/** How a job's completion was established; the same values as `PrintConfirmation`. */
+export type BridgeJobConfirmation = 'pages' | 'phase' | 'none';
+
 /** Messages the client sends. */
 export type BridgeClientMessage =
   | { type: 'auth'; token: string }
   | { type: 'list' }
   | { type: 'open'; printerId: string }
   | { type: 'status' }
-  | { type: 'close' };
+  | { type: 'close' }
+  /**
+   * A job is about to be written. The bridge never looks inside a job, so
+   * this is how its print log learns the page count and label. No reply.
+   */
+  | { type: 'job'; pages: number; label?: string }
+  /** The announced job is over, however it ended. No reply. */
+  | { type: 'job-done'; pagesPrinted: number; confirmation: BridgeJobConfirmation; error?: string };
 
 /** Messages the bridge sends. */
 export type BridgeServerMessage =

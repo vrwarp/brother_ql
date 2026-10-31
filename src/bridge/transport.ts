@@ -25,7 +25,13 @@ import type { Tracer } from '../diagnostics.js';
 import { BridgeError, DeviceDisconnectedError, TransferTimeoutError } from '../errors.js';
 import { hexFormat } from '../internal/bytes.js';
 import { TypedEventTarget } from '../internal/events.js';
-import { StatusFramer, type CompletionMode, type Transport } from '../transport.js';
+import {
+  StatusFramer,
+  type CompletionMode,
+  type JobAnnouncement,
+  type JobReport,
+  type Transport,
+} from '../transport.js';
 import { AsyncQueue } from '../usb/async-queue.js';
 import type { TransportEvents } from '../usb/transport.js';
 import {
@@ -500,14 +506,15 @@ export class BridgeTransport extends TypedEventTarget<TransportEvents> implement
   async write(
     data: Uint8Array,
     onProgress?: (bytesSent: number, bytesTotal: number) => void,
-    betweenChunks?: () => void,
+    betweenChunks?: () => void | Promise<void>,
   ): Promise<void> {
     const socket = this.#requireSocket();
     this.#diag?.event('bridge', 'write-start', { bytes: data.length });
 
     let sent = 0;
     while (sent < data.length) {
-      betweenChunks?.();
+      const pause = betweenChunks?.();
+      if (pause) await pause;
       const chunk = data.subarray(sent, Math.min(sent + this.#chunkSize, data.length));
       const chunkStarted = Date.now();
 
@@ -557,6 +564,36 @@ export class BridgeTransport extends TypedEventTarget<TransportEvents> implement
     }
 
     this.#diag?.event('bridge', 'write-done', { bytes: sent });
+  }
+
+  /**
+   * Tell the bridge what the coming frames are, for its print log.
+   *
+   * Fire and forget: the bridge sends no reply, and a failure to tell it
+   * changes nothing about the job.
+   */
+  beginJob(job: JobAnnouncement): void {
+    this.#tell({ type: 'job', pages: job.pages, ...(job.label ? { label: job.label } : {}) });
+  }
+
+  /** Tell the bridge how the announced job ended. Fire and forget. */
+  endJob(report: JobReport): void {
+    this.#tell({
+      type: 'job-done',
+      pagesPrinted: report.pagesPrinted,
+      confirmation: report.confirmation,
+      ...(report.error ? { error: report.error } : {}),
+    });
+  }
+
+  #tell(message: BridgeClientMessage): void {
+    if (this.#state !== 'open' || !this.#socket || this.#socket.gone) return;
+    try {
+      this.#socket.send(message);
+      this.#diag?.event('bridge', message.type, { ...message });
+    } catch {
+      // Best effort by contract; the job itself is unaffected.
+    }
   }
 
   /**

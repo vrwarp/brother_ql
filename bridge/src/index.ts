@@ -7,10 +7,9 @@ import { createLogger } from './log.js';
 import { createBridgeServer, ensureAdminToken } from './server.js';
 import { Store } from './store.js';
 
-const log = createLogger();
-
 async function main(): Promise<void> {
   const config = loadConfig();
+  const log = createLogger({ stdoutLevel: config.logLevel, capacity: config.logBuffer });
   const store = await Store.open(config.dataDir);
   await ensureAdminToken(config, store, log);
   const bridge = createBridgeServer({ config, store, log });
@@ -28,6 +27,6 @@ async function main(): Promise<void> {
 }
 
 main().catch((error: unknown) => {
-  log('error', 'failed to start', { error: error instanceof Error ? error.message : String(error) });
+  console.error(JSON.stringify({ t: new Date().toISOString(), level: 'error', message: 'failed to start', error: error instanceof Error ? error.message : String(error) }));
   process.exit(1);
 });

@@ -9,6 +9,9 @@
 import { createServer } from 'node:net';
 import { createRequire } from 'node:module';
 import { mkdirSync } from 'node:fs';
+import { once } from 'node:events';
+import { WebSocket } from 'ws';
+import { generateToken, hashToken, tokenHint } from '../dist/tokens.js';
 import { loadConfig } from '../dist/config.js';
 import { createLogger } from '../dist/log.js';
 import { createBridgeServer, ensureAdminToken } from '../dist/server.js';
@@ -18,7 +21,7 @@ const { chromium } = createRequire(import.meta.url)('playwright');
 const OUT = new URL('../docs/screenshots/', import.meta.url).pathname;
 mkdirSync(OUT, { recursive: true });
 const ADMIN = 'bql_walkthrough_admin_token';
-const log = createLogger(() => {});
+const log = createLogger({ write: () => {} });
 
 // A fake QL-810W that answers ESC i S with "62 mm continuous, waiting".
 const status = Buffer.alloc(32);
@@ -40,6 +43,29 @@ const bridge = createBridgeServer({ config, store, log });
 const addr = await bridge.start(0);
 const base = `http://127.0.0.1:${addr.port}`;
 
+// A few prints through the relay, so the print log and counters have content:
+// two good jobs on the fake printer and one the printer refused.
+const CLIENT = generateToken();
+await store.addToken({ id: 'kiosk', name: 'Front desk tablet', hash: hashToken(CLIENT), hint: tokenHint(CLIENT), createdAt: new Date().toISOString() });
+const fake = await store.addPrinter({ name: 'Shipping desk', host: '127.0.0.1', port: printer.address().port, model: 'QL-810W', statusMode: 'tcp' });
+await store.addPrinter({ name: 'Warehouse', host: '192.0.2.44', port: 9100, model: 'QL-820NWB', statusMode: 'snmp' });
+async function relayJob(pages, label, outcome) {
+  const ws = new WebSocket(`ws://127.0.0.1:${addr.port}/ws`);
+  await once(ws, 'open');
+  const next = (type) => new Promise((resolve) => { const on = (d, bin) => { if (bin) return; const m = JSON.parse(d.toString()); if (m.type === type) { ws.off('message', on); resolve(m); } }; ws.on('message', on); });
+  ws.send(JSON.stringify({ type: 'auth', token: CLIENT })); await next('auth-ok');
+  ws.send(JSON.stringify({ type: 'open', printerId: fake.id })); await next('opened');
+  ws.send(JSON.stringify({ type: 'job', pages, label }));
+  for (let i = 0; i < pages; i++) { ws.send(Buffer.alloc(11604, i), { binary: true }); await next('ack'); }
+  ws.send(JSON.stringify(outcome));
+  ws.send(JSON.stringify({ type: 'close' })); await next('closed');
+  ws.close();
+  await new Promise((r) => setTimeout(r, 50));
+}
+await relayJob(2, '62', { type: 'job-done', pagesPrinted: 2, confirmation: 'pages' });
+await relayJob(1, '29x90', { type: 'job-done', pagesPrinted: 1, confirmation: 'pages' });
+await relayJob(1, '62', { type: 'job-done', pagesPrinted: 0, confirmation: 'none', error: 'PrinterStatusError: Cover opened while printing' });
+
 const browser = await chromium.launch();
 const page = await (await browser.newContext({ viewport: { width: 1200, height: 900 } })).newPage();
 page.on('dialog', (d) => d.accept());
@@ -56,10 +82,10 @@ await page.click('#login-form button[type=submit]');
 await page.waitForSelector('#app:not(.hidden)');
 await page.waitForSelector('#printers tr');
 await shot('03-dashboard-empty');
-await page.fill('#token-name', 'Front desk tablet');
+await page.fill('#token-name', 'Warehouse scanner');
 await page.click('#token-form button[type=submit]');
 await page.waitForSelector('#new-token:not(.hidden)');
-await page.waitForFunction(() => document.querySelectorAll('#tokens tr td button').length === 1);
+await page.waitForFunction(() => document.querySelectorAll('#tokens tr td button').length === 2);
 await shot('04-token-created');
 
 const add = async (name, host, port, model, mode) => {
@@ -74,9 +100,10 @@ const add = async (name, host, port, model, mode) => {
     name,
   );
 };
-await add('Shipping desk', '127.0.0.1', printer.address().port, 'QL-810W', 'tcp');
-await add('Warehouse', '192.0.2.44', 9100, 'QL-820NWB', 'snmp');
+await add('Returns counter', '192.0.2.45', 9100, 'QL-1110NWB', 'snmp');
 await shot('05-printers-registered');
+await (await page.$$('#printers button[data-delete]')).at(-1).click(); // the page-wide dialog handler accepts
+await page.waitForFunction(() => document.querySelectorAll('#printers button[data-delete]').length === 2);
 await page.click('#printers button[data-probe]');
 await page.waitForFunction(() => /reachable/.test(document.querySelector('#probe-result')?.textContent ?? ''));
 await shot('06-probe-reachable');

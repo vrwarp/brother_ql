@@ -8,6 +8,8 @@
  * the first-start behaviour in `tokens.ts`.
  */
 
+import { LOG_LEVELS, type LogLevel } from './log.js';
+
 export interface BridgeConfig {
   /** TCP port to listen on. Default 8080. */
   port: number;
@@ -35,6 +37,14 @@ export interface BridgeConfig {
   connectTimeoutMs: number;
   /** Milliseconds to wait for an SNMP answer. Default 2000. */
   snmpTimeoutMs: number;
+  /** Lowest level written to stdout; the in-memory buffer keeps every level. Default info. */
+  logLevel: LogLevel;
+  /** Log records kept in memory for the diagnostics bundle. Default 2000. */
+  logBuffer: number;
+  /** Finished print jobs kept and shown in the admin page. Default 5. */
+  recentJobs: number;
+  /** Milliseconds without frames after which an unreported job counts as sent. Default 3000. */
+  jobIdleMs: number;
 }
 
 function integer(value: string | undefined, fallback: number, name: string): number {
@@ -59,6 +69,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): BridgeConfig {
     throw new Error('TLS_CERT_FILE and TLS_KEY_FILE must be set together.');
   }
 
+  const logLevel = (env.LOG_LEVEL || 'info') as LogLevel;
+  if (!LOG_LEVELS.includes(logLevel)) {
+    throw new Error(`LOG_LEVEL must be one of ${LOG_LEVELS.join(', ')}, got "${env.LOG_LEVEL}".`);
+  }
+
   return {
     port: integer(env.PORT, 8080, 'PORT'),
     host: env.HOST || '0.0.0.0',
@@ -70,6 +85,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): BridgeConfig {
     authTimeoutMs: integer(env.AUTH_TIMEOUT_MS, 10_000, 'AUTH_TIMEOUT_MS'),
     connectTimeoutMs: integer(env.CONNECT_TIMEOUT_MS, 5_000, 'CONNECT_TIMEOUT_MS'),
     snmpTimeoutMs: integer(env.SNMP_TIMEOUT_MS, 2_000, 'SNMP_TIMEOUT_MS'),
+    logLevel,
+    logBuffer: integer(env.LOG_BUFFER, 2_000, 'LOG_BUFFER'),
+    recentJobs: integer(env.RECENT_JOBS, 5, 'RECENT_JOBS'),
+    jobIdleMs: integer(env.JOB_IDLE_MS, 3_000, 'JOB_IDLE_MS'),
   };
 }
 

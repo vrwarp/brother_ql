@@ -183,7 +183,7 @@ describe('probePrinter', () => {
 describe('logger', () => {
   it('writes one JSON line per call, with the fields merged', () => {
     const lines: string[] = [];
-    const log = createLogger((line) => lines.push(line));
+    const log = createLogger({ write: (line) => lines.push(line) });
     log('info', 'hello', { a: 1 });
     const record = JSON.parse(lines[0]!);
     expect(record.level).toBe('info');

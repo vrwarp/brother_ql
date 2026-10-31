@@ -10,7 +10,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { loadConfig } from '../src/config.js';
-import { silentLogger } from '../src/log.js';
+import { createLogger, silentLogger } from '../src/log.js';
 import { createBridgeServer, ensureAdminToken, type BridgeServer } from '../src/server.js';
 import { Store } from '../src/store.js';
 
@@ -82,7 +82,7 @@ describe('admin authentication', () => {
   it('accepts the admin token', async () => {
     const res = await call('/api/admin/session');
     expect(res.status).toBe(200);
-    expect((await body(res)).protocolVersion).toBe(1);
+    expect((await body(res)).protocolVersion).toBe(2);
   });
 });
 
@@ -195,5 +195,90 @@ describe('CORS', () => {
     base = `http://127.0.0.1:${address.port}`;
     const res = await fetch(base + '/api/printers', { headers: { origin: 'https://evil.example', authorization: `Bearer ${ADMIN}` } });
     expect(res.status).toBe(403);
+  });
+});
+
+describe('jobs, statistics and diagnostics', () => {
+  const job = (overrides: Record<string, unknown> = {}) => ({
+    id: 'j1',
+    session: 'abcd1234',
+    printerId: 'p1',
+    printerName: 'Desk',
+    token: 'tablet',
+    startedAt: '2026-01-01T00:00:00.000Z',
+    finishedAt: '2026-01-01T00:00:02.000Z',
+    durationMs: 2000,
+    bytes: 1234,
+    frames: 2,
+    pages: 2,
+    pagesPrinted: 2,
+    confirmation: 'phase' as const,
+    completions: 0,
+    outcome: 'printed' as const,
+    faults: [],
+    ...overrides,
+  });
+
+  it('lists recent jobs newest first, capped at the configured count', async () => {
+    for (let i = 0; i < 7; i++) await store.recordJob(job({ id: `j${i}` }), 5);
+    const { jobs } = await body(await call('/api/admin/jobs'));
+    expect(jobs.map((j: { id: string }) => j.id)).toEqual(['j6', 'j5', 'j4', 'j3', 'j2']);
+  });
+
+  it('reports per-printer counters and resets them', async () => {
+    await store.recordJob(job(), 5);
+    await store.recordJob(job({ id: 'j2', faults: [{ at: 't', statusType: 'error', phase: 'printing', errorInfo: [0, 16], hex: '' }] }), 5);
+    const { stats } = await body(await call('/api/admin/stats'));
+    expect(stats.p1).toMatchObject({ jobs: 2, labels: 4, labelsConfirmed: 4, jobsWithFaults: 1, faultEvents: 1 });
+    // The printers list carries the same counters.
+    const added = await body(await call('/api/admin/printers', { method: 'POST', body: JSON.stringify({ name: 'Desk', host: '10.0.0.2' }) }));
+    await store.recordJob(job({ id: 'j3', printerId: added.printer.id }), 5);
+    const { printers } = await body(await call('/api/admin/printers'));
+    expect(printers[0].stats).toMatchObject({ jobs: 1, labels: 2 });
+
+    expect((await call('/api/admin/stats', { method: 'DELETE' })).status).toBe(204);
+    expect((await body(await call('/api/admin/stats'))).stats).toEqual({});
+    expect((await body(await call('/api/admin/jobs'))).jobs).toEqual([]);
+  });
+
+  it('bundles diagnostics with secrets left out', async () => {
+    await call('/api/admin/tokens', { method: 'POST', body: JSON.stringify({ name: 'kiosk' }) });
+    const added = await body(await call('/api/admin/printers', { method: 'POST', body: JSON.stringify({ name: 'Desk', host: '10.0.0.2', snmpCommunity: 's3cret' }) }));
+    await store.recordJob(job({ printerId: added.printer.id }), 5);
+    const res = await call('/api/admin/diagnostics');
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-disposition')).toMatch(/attachment; filename="brother-ql-bridge-diagnostics-.*\.json"/);
+    const bundle = await body(res);
+    expect(bundle.bridge).toMatchObject({ protocolVersion: 2 });
+    expect(typeof bundle.bridge.version).toBe('string');
+    expect(bundle.bridge.uptimeSeconds).toBeGreaterThanOrEqual(0);
+    expect(bundle.config).not.toHaveProperty('adminToken');
+    expect(bundle.config.recentJobs).toBe(5);
+    expect(bundle.printers[0].snmpCommunity).toBe('***');
+    expect(bundle.printers[0].stats.jobs).toBe(1);
+    expect(bundle.tokens[0]).toMatchObject({ name: 'kiosk' });
+    expect(bundle.tokens[0].hash).toBeUndefined();
+    expect(bundle.jobs).toHaveLength(1);
+    expect(Array.isArray(bundle.logs)).toBe(true);
+    expect(JSON.stringify(bundle)).not.toContain(ADMIN);
+  });
+
+  it('includes recent log records in the bundle when a buffering logger is used', async () => {
+    await server.stop();
+    const log = createLogger({ write: () => {}, capacity: 50 });
+    const config = loadConfig({ ADMIN_TOKEN: ADMIN });
+    server = createBridgeServer({ config, store, log, probe: async () => lastProbe as never });
+    const address = await server.start(0);
+    base = `http://127.0.0.1:${address.port}`;
+    await call('/api/admin/tokens', { method: 'POST', body: JSON.stringify({ name: 'kiosk' }) });
+    const bundle = await body(await call('/api/admin/diagnostics'));
+    const messages = bundle.logs.map((r: { message: string }) => r.message);
+    expect(messages).toContain('listening');
+    expect(messages).toContain('token created');
+    expect(messages).toContain('http'); // the debug-level request trace is kept too
+  });
+
+  it('refuses other methods on stats', async () => {
+    expect((await call('/api/admin/stats', { method: 'POST', body: '{}' })).status).toBe(405);
   });
 });

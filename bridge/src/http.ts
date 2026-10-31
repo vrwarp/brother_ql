@@ -10,12 +10,14 @@
 
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { randomUUID } from 'node:crypto';
+import { createRequire } from 'node:module';
 
 import { ADMIN_PAGE } from './admin-ui.js';
 import type { BridgeConfig } from './config.js';
 import { originAllowed } from './config.js';
 import type { Logger } from './log.js';
 import { probePrinter, type ProbeResult } from './probe.js';
+import { BRIDGE_PROTOCOL_VERSION } from './protocol.js';
 import type { PrinterLocks } from './session.js';
 import { describePrinter } from './session.js';
 import { ValidationError, type PrinterInput, type Store, type TokenRecord } from './store.js';
@@ -26,9 +28,15 @@ export interface HttpContext {
   store: Store;
   locks: PrinterLocks;
   log: Logger;
+  /** When this process started, for the diagnostics bundle. */
+  startedAt?: Date;
   /** Replaceable for tests. */
   probe?: (printer: Parameters<typeof probePrinter>[0]) => Promise<ProbeResult>;
 }
+
+const { version: BRIDGE_VERSION } = createRequire(import.meta.url)('../package.json') as {
+  version: string;
+};
 
 const MAX_BODY = 64 * 1024;
 
@@ -90,6 +98,7 @@ function publicToken(token: TokenRecord): Omit<TokenRecord, 'hash'> {
 /** Build the request handler. */
 export function createHttpHandler(ctx: HttpContext): (req: IncomingMessage, res: ServerResponse) => void {
   const { config, store, locks, log } = ctx;
+  const startedAt = ctx.startedAt ?? new Date();
   const probe = ctx.probe ?? ((printer) =>
     probePrinter(printer, {
       connectTimeoutMs: config.connectTimeoutMs,
@@ -117,6 +126,7 @@ export function createHttpHandler(ctx: HttpContext): (req: IncomingMessage, res:
     const path = url.pathname.replace(/\/+$/, '') || '/';
     const method = req.method ?? 'GET';
     const origin = typeof req.headers.origin === 'string' ? req.headers.origin : undefined;
+    if (path !== '/healthz') log('debug', 'http', { method, path, origin });
 
     if (path.startsWith('/api/')) {
       if (!originAllowed(origin, config.allowedOrigins)) throw new HttpError(403, 'Origin not allowed.');
@@ -167,7 +177,77 @@ export function createHttpHandler(ctx: HttpContext): (req: IncomingMessage, res:
       const [resource, id, action] = rest;
 
       if (resource === 'session' && method === 'GET') {
-        json(res, 200, { ok: true, protocolVersion: 1 });
+        json(res, 200, { ok: true, protocolVersion: BRIDGE_PROTOCOL_VERSION, version: BRIDGE_VERSION });
+        return;
+      }
+
+      if (resource === 'jobs' && method === 'GET') {
+        json(res, 200, { jobs: store.jobs });
+        return;
+      }
+
+      if (resource === 'stats') {
+        if (method === 'GET') {
+          json(res, 200, { stats: store.stats });
+          return;
+        }
+        if (method === 'DELETE') {
+          await store.resetStats();
+          log('info', 'statistics reset', {});
+          res.writeHead(204);
+          res.end();
+          return;
+        }
+        throw new HttpError(405, 'Method not allowed.');
+      }
+
+      // Everything needed to diagnose a problem from afar, secrets left out:
+      // the admin token is never stored in the clear, client tokens appear
+      // by name and prefix only, and a non-default SNMP community is masked.
+      if (resource === 'diagnostics' && method === 'GET') {
+        const now = new Date();
+        const bundle = {
+          generatedAt: now.toISOString(),
+          bridge: {
+            version: BRIDGE_VERSION,
+            protocolVersion: BRIDGE_PROTOCOL_VERSION,
+            node: process.version,
+            platform: `${process.platform}/${process.arch}`,
+            startedAt: startedAt.toISOString(),
+            uptimeSeconds: Math.round((now.getTime() - startedAt.getTime()) / 1000),
+          },
+          config: {
+            port: config.port,
+            host: config.host,
+            dataDir: config.dataDir,
+            allowedOrigins: config.allowedOrigins,
+            tls: Boolean(config.tlsCertFile),
+            authTimeoutMs: config.authTimeoutMs,
+            connectTimeoutMs: config.connectTimeoutMs,
+            snmpTimeoutMs: config.snmpTimeoutMs,
+            logLevel: config.logLevel,
+            logBuffer: config.logBuffer,
+            recentJobs: config.recentJobs,
+            jobIdleMs: config.jobIdleMs,
+          },
+          printers: store.printers.map((p) => ({
+            ...p,
+            snmpCommunity: p.snmpCommunity === 'public' ? 'public' : '***',
+            busy: locks.isBusy(p.id),
+            stats: store.statsFor(p.id),
+          })),
+          tokens: store.tokens.map(publicToken),
+          jobs: store.jobs,
+          logs: log.recent(),
+        };
+        const payload = JSON.stringify(bundle, null, 2);
+        res.writeHead(200, {
+          'content-type': 'application/json; charset=utf-8',
+          'content-length': Buffer.byteLength(payload),
+          'cache-control': 'no-store',
+          'content-disposition': `attachment; filename="brother-ql-bridge-diagnostics-${now.toISOString().replace(/[:.]/g, '-')}.json"`,
+        });
+        res.end(payload);
         return;
       }
 
@@ -208,7 +288,11 @@ export function createHttpHandler(ctx: HttpContext): (req: IncomingMessage, res:
       if (resource === 'printers') {
         if (!id && method === 'GET') {
           json(res, 200, {
-            printers: store.printers.map((p) => ({ ...p, busy: locks.isBusy(p.id) })),
+            printers: store.printers.map((p) => ({
+              ...p,
+              busy: locks.isBusy(p.id),
+              stats: store.statsFor(p.id),
+            })),
           });
           return;
         }

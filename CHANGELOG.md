@@ -21,6 +21,19 @@ Changes to the Python package are not tracked here.
   offers. Because a networked printer does not volunteer completion packets,
   `PrintResult` now carries a `confirmation` field (`pages`, `phase` or `none`)
   saying how the result was established. See the Wi-Fi section of the README.
+- **A print log and counters in the bridge.** The bridge keeps the last few
+  jobs (page count and label as the client announced them, outcome as the
+  client reported it, bytes and frames as the bridge counted them, and any
+  fault the printer reported along the way) plus per-printer totals, and shows
+  them on its dashboard. Its logs carry a session id per connection and record
+  frames and status packets at debug level into a bounded buffer, which a
+  **Download diagnostics** button bundles with the (secret-free) configuration
+  for a bug report. Bridge protocol version 2 adds the `job` and `job-done`
+  messages the log is built from.
+- **Faults mid-job over SNMP.** On a transport that cannot volunteer status the
+  library now polls during the transfer as well (`midJobStatusIntervalMs`), so a
+  cover opened during a long job aborts it within about a second, as it would
+  over USB. A transiently failed poll is retried rather than failing the job.
 - **A transport seam.** The printer core now accepts any `Transport`, not only a
   WebUSB device; `UsbTransport` and `BridgeTransport` both implement it, and the
   status-packet reframer (`StatusFramer`) is shared between them. `printer.device`

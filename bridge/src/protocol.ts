@@ -9,7 +9,7 @@
  * alone, which is why the types are duplicated rather than imported.
  */
 
-export const BRIDGE_PROTOCOL_VERSION = 1;
+export const BRIDGE_PROTOCOL_VERSION = 2;
 
 /**
  * How a registered printer's status can be read.
@@ -46,12 +46,23 @@ export type BridgeErrorCode =
   | 'status-failed'
   | 'write-failed';
 
+/** How a client established that a job finished; mirrors the library's PrintConfirmation. */
+export type JobConfirmation = 'pages' | 'phase' | 'none';
+
 export type BridgeClientMessage =
   | { type: 'auth'; token: string }
   | { type: 'list' }
   | { type: 'open'; printerId: string }
   | { type: 'status' }
-  | { type: 'close' };
+  | { type: 'close' }
+  /** A job is about to be written: its page count, and its label if known. No reply. */
+  | { type: 'job'; pages: number; label?: string }
+  /** The announced job is over, however it ended. No reply. */
+  | { type: 'job-done'; pagesPrinted: number; confirmation: JobConfirmation; error?: string };
+
+function isCount(value: unknown): value is number {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0 && value <= 100_000;
+}
 
 export type BridgeServerMessage =
   | { type: 'hello'; version: number }
@@ -84,6 +95,24 @@ export function parseClientMessage(text: string): BridgeClientMessage | null {
     case 'status':
     case 'close':
       return { type: message.type };
+    case 'job': {
+      if (!isCount(message.pages)) return null;
+      const job: BridgeClientMessage = { type: 'job', pages: message.pages };
+      if (typeof message.label === 'string' && message.label.length <= 40) job.label = message.label;
+      return job;
+    }
+    case 'job-done': {
+      const confirmation = message.confirmation;
+      if (!isCount(message.pagesPrinted)) return null;
+      if (confirmation !== 'pages' && confirmation !== 'phase' && confirmation !== 'none') return null;
+      const done: BridgeClientMessage = {
+        type: 'job-done',
+        pagesPrinted: message.pagesPrinted,
+        confirmation,
+      };
+      if (typeof message.error === 'string') done.error = message.error.slice(0, 500);
+      return done;
+    }
     default:
       return null;
   }

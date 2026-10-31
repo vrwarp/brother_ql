@@ -45,7 +45,13 @@ import type { Tracer } from './diagnostics.js';
 import { TypedEventTarget } from './internal/events.js';
 import { resolveModel, type Model } from './models.js';
 import { tryParseStatus, type PrinterStatus } from './status.js';
-import { isTransport, type Transport } from './transport.js';
+import {
+  isTransport,
+  type JobAnnouncement,
+  type JobConfirmation,
+  type JobReport,
+  type Transport,
+} from './transport.js';
 import { QueueTimeoutError } from './usb/async-queue.js';
 import {
   getPairedPrinterDevices,
@@ -156,6 +162,12 @@ const PHASE_IDLE_POLLS = 4;
  * reply that came too late (`timeout`); both are the weather on a Wi-Fi link,
  * not a verdict on the job. Every other failure is.
  */
+/** An error as a job report carries it: name and message, kept short. */
+export function describeError(error: unknown): string {
+  const text = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+  return text.length > 200 ? `${text.slice(0, 199)}…` : text;
+}
+
 function isTransientStatusFailure(error: unknown): boolean {
   return (
     error instanceof BridgeError && (error.reason === 'status-failed' || error.reason === 'timeout')
@@ -180,7 +192,7 @@ export interface PrintProgress {
  *  - `'none'`: the bytes were accepted and nothing more is known. Non-blocking
  *    jobs, and transports without a status path.
  */
-export type PrintConfirmation = 'pages' | 'phase' | 'none';
+export type PrintConfirmation = JobConfirmation;
 
 export interface PrintResult {
   /**
@@ -230,6 +242,13 @@ export interface PrinterOptions extends TransportOptions {
    * transport's completion mode is `'phase'`. Defaults to 250.
    */
   statusPollIntervalMs?: number;
+  /**
+   * On a transport that cannot volunteer status, how often to ask for it
+   * *while the job is still being written*, in milliseconds, so a fault
+   * mid-transfer stops the job early the way a USB printer's error packet
+   * does. Zero disables it. Defaults to 1000.
+   */
+  midJobStatusIntervalMs?: number;
 }
 
 export interface SendRawOptions {
@@ -257,6 +276,7 @@ export class BrotherQLPrinterCore extends TypedEventTarget<PrinterEvents> {
   #model: Model | undefined;
   #busy = false;
   readonly #statusPollIntervalMs: number;
+  readonly #midJobStatusIntervalMs: number;
 
   /**
    * The tracer given at construction, if any, for subclasses to report their
@@ -281,6 +301,12 @@ export class BrotherQLPrinterCore extends TypedEventTarget<PrinterEvents> {
     if (!Number.isFinite(this.#statusPollIntervalMs) || this.#statusPollIntervalMs < 0) {
       throw new RangeError(
         `statusPollIntervalMs must be a non-negative number, got ${this.#statusPollIntervalMs}.`,
+      );
+    }
+    this.#midJobStatusIntervalMs = options.midJobStatusIntervalMs ?? 1000;
+    if (!Number.isFinite(this.#midJobStatusIntervalMs) || this.#midJobStatusIntervalMs < 0) {
+      throw new RangeError(
+        `midJobStatusIntervalMs must be a non-negative number, got ${this.#midJobStatusIntervalMs}.`,
       );
     }
 
@@ -701,7 +727,7 @@ export class BrotherQLPrinterCore extends TypedEventTarget<PrinterEvents> {
   protected async writeJob(
     instructions: Uint8Array,
     onProgress: ((bytesSent: number, bytesTotal: number) => void) | undefined,
-    betweenChunks: () => void,
+    betweenChunks: () => void | Promise<void>,
   ): Promise<void> {
     try {
       await this.transport.write(instructions, onProgress, betweenChunks);
@@ -715,8 +741,68 @@ export class BrotherQLPrinterCore extends TypedEventTarget<PrinterEvents> {
    * Send an already-built job — one produced by `convert` (possibly in a
    * worker), by `createJob`, or captured from another tool.
    */
+  /**
+   * What runs between chunks of a job.
+   *
+   * Always drains whatever the printer has said, so an error stops the job
+   * early. On a transport that volunteers nothing — the bridge reading status
+   * over SNMP — it also asks for status every `midJobStatusIntervalMs`, which
+   * is what lets a cover opened during a long transfer abort the job within
+   * about a second rather than only once the last byte is out. A fetch that
+   * fails transiently mid-job is ignored, as it is during the completion poll.
+   */
+  protected jobChunkHook(
+    progress: JobProgress,
+    onPageDone?: (pagesPrinted: number) => void,
+  ): () => Promise<void> {
+    let lastPoll = Date.now();
+    return async () => {
+      if (
+        this.transport.completion === 'phase' &&
+        this.#midJobStatusIntervalMs > 0 &&
+        Date.now() - lastPoll >= this.#midJobStatusIntervalMs
+      ) {
+        lastPoll = Date.now();
+        try {
+          // The answer rides in ahead of the acknowledgement, so by the time
+          // this resolves it is on the queue for the drain below.
+          await this.requestStatus();
+        } catch (error) {
+          if (!isTransientStatusFailure(error)) throw error;
+          this.diagnostics?.event('printer', 'poll-failed', { during: 'send', error: String(error) });
+        }
+      }
+      this.drainForErrors(progress, onPageDone);
+    };
+  }
+
+  /** Tell the transport a job is coming, if it cares. Never lets a hook fail a job. */
+  protected announceJob(job: JobAnnouncement): boolean {
+    if (!this.transport.beginJob) return false;
+    try {
+      this.transport.beginJob(job);
+      return true;
+    } catch (error) {
+      this.diagnostics?.event('printer', 'hook-failed', { hook: 'beginJob', error: String(error) });
+      return false;
+    }
+  }
+
+  /** Tell the transport how an announced job ended. Never lets a hook fail a job. */
+  protected reportJob(announced: boolean, report: JobReport): void {
+    if (!announced || !this.transport.endJob) return;
+    try {
+      this.transport.endJob(report);
+    } catch (error) {
+      this.diagnostics?.event('printer', 'hook-failed', { hook: 'endJob', error: String(error) });
+    }
+  }
+
   async sendRaw(instructions: Uint8Array, options: SendRawOptions = {}): Promise<PrintResult> {
     this.acquire();
+    const report: JobReport = { pagesPrinted: 0, confirmation: 'none' };
+    let announced = false;
+    let job: JobProgress | undefined;
     try {
       // A non-finite page count would make the completion condition
       // unsatisfiable and burn the whole idle timeout; treat it like the
@@ -739,6 +825,8 @@ export class BrotherQLPrinterCore extends TypedEventTarget<PrinterEvents> {
       // stops the job promptly instead of receiving every remaining byte
       // first, and an early page confirmation is counted rather than lost.
       const progress = this.startJob(pageCount);
+      job = progress;
+      announced = this.announceJob({ pages: pageCount });
 
       await this.writeJob(
         instructions,
@@ -750,10 +838,11 @@ export class BrotherQLPrinterCore extends TypedEventTarget<PrinterEvents> {
             pagesCompleted: progress.pagesPrinted,
             pageCount,
           }),
-        () => this.drainForErrors(progress),
+        this.jobChunkHook(progress),
       );
 
       if (options.nonBlocking) {
+        report.pagesPrinted = progress.pagesPrinted;
         return {
           pagesPrinted: progress.pagesPrinted,
           lastStatus: progress.lastStatus,
@@ -761,8 +850,16 @@ export class BrotherQLPrinterCore extends TypedEventTarget<PrinterEvents> {
         };
       }
 
-      return await this.awaitCompletion(progress, idleMs);
+      const result = await this.awaitCompletion(progress, idleMs);
+      report.pagesPrinted = result.pagesPrinted;
+      report.confirmation = result.confirmation;
+      return result;
+    } catch (error) {
+      if (job) report.pagesPrinted = job.pagesPrinted;
+      report.error = describeError(error);
+      throw error;
     } finally {
+      this.reportJob(announced, report);
       this.release();
     }
   }
