@@ -723,16 +723,31 @@ export class BrotherQLPrinterCore extends TypedEventTarget<PrinterEvents> {
    * Shared by `sendRaw` here and `print` in the subclass so the two cannot
    * drift: whatever stops a write part-way leaves the same mess behind, and
    * the printer has to be told either way.
+   *
+   * Only part-way, though. A write that failed before its first byte — the
+   * bridge could not open the printer, say — left nothing on the printer to
+   * take back, and the cancel sequence would only go through the same failing
+   * open again: a kiosk whose printer was off the Wi-Fi paid twice for every
+   * label it could not print.
    */
   protected async writeJob(
     instructions: Uint8Array,
     onProgress: ((bytesSent: number, bytesTotal: number) => void) | undefined,
     betweenChunks: () => void | Promise<void>,
   ): Promise<void> {
+    let sent = 0;
     try {
-      await this.transport.write(instructions, onProgress, betweenChunks);
+      await this.transport.write(
+        instructions,
+        (bytesSent, bytesTotal) => {
+          sent = bytesSent;
+          onProgress?.(bytesSent, bytesTotal);
+        },
+        betweenChunks,
+      );
     } catch (error) {
-      await this.cancelAbandonedJob();
+      if (sent > 0) await this.cancelAbandonedJob();
+      else this.diagnostics?.event('printer', 'job-not-started', { error: String(error) });
       throw error;
     }
   }
