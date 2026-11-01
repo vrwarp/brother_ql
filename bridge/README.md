@@ -205,11 +205,26 @@ All via environment variables; the defaults suit the container.
 | `AUTH_TIMEOUT_MS` | `10000` | How long a connection may stay unauthenticated. |
 | `CONNECT_TIMEOUT_MS` | `5000` | How long to wait for a printer's port 9100 to accept. |
 | `SNMP_TIMEOUT_MS` | `2000` | How long to wait for an SNMP answer. |
+| `SNMP_RETRANSMIT_MS` | `700` | Resend an unanswered SNMP request this often within the timeout; `0` sends it once. A lost datagram is how a status read usually fails on a poor Wi-Fi link. |
+| `WS_PING_MS` | `25000` | Ping every client this often; `0` disables. Keeps an idle connection alive through a reverse proxy's idle timeout (Synology's is 60 s). A client that answers neither of two pings in a row is dropped. |
 | `LOG_LEVEL` | `info` | Lowest level written to stdout (`debug`, `info`, `warn`, `error`). The diagnostics buffer keeps every level. |
 | `LOG_BUFFER` | `2000` | Log records kept in memory for the diagnostics bundle. |
 | `RECENT_JOBS` | `5` | Finished print jobs kept and shown on the dashboard. |
 | `JOB_IDLE_MS` | `3000` | Quiet time after which a job the client never reported on counts as sent. |
 | `SIMULATED_PRINTER` | `false` | Enable the simulated printer at start-up. The admin page can switch it either way at any time. |
+
+## Behind a reverse proxy
+
+A reverse proxy that terminates TLS in front of the bridge — Synology's,
+nginx, Caddy — must pass the WebSocket upgrade through (`Upgrade` and
+`Connection` headers; Synology's reverse proxy has a *WebSocket* custom header
+preset for this). Most also cut a connection that carries nothing for a while:
+nginx's `proxy_read_timeout`, and so Synology's, defaults to 60 seconds, which
+an idle kiosk's connection would hit once a minute. The bridge pings every
+client every `WS_PING_MS` (25 s) so that it does not, and a kiosk whose pongs
+stop coming is dropped after two misses. Raise the proxy's timeout as well if
+you can; a connection kept open by pings alone is fine, but a longer timeout
+costs nothing.
 
 ## Security notes
 

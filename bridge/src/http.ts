@@ -123,6 +123,7 @@ export function createHttpHandler(ctx: HttpContext): (req: IncomingMessage, res:
     probePrinter(printer, {
       connectTimeoutMs: config.connectTimeoutMs,
       snmpTimeoutMs: config.snmpTimeoutMs,
+      snmpRetransmitMs: config.snmpRetransmitMs,
     }));
 
   function requireAdmin(req: IncomingMessage): void {
@@ -277,6 +278,8 @@ export function createHttpHandler(ctx: HttpContext): (req: IncomingMessage, res:
             authTimeoutMs: config.authTimeoutMs,
             connectTimeoutMs: config.connectTimeoutMs,
             snmpTimeoutMs: config.snmpTimeoutMs,
+            snmpRetransmitMs: config.snmpRetransmitMs,
+            wsPingMs: config.wsPingMs,
             logLevel: config.logLevel,
             logBuffer: config.logBuffer,
             recentJobs: config.recentJobs,

@@ -203,6 +203,12 @@ export interface SnmpGetOptions {
   community?: string;
   oid: string;
   timeoutMs?: number;
+  /**
+   * Send the request again every this many milliseconds until answered or
+   * timed out; 0 or absent sends it once. The same request id goes each
+   * time, so whichever copy the printer answers first is the answer.
+   */
+  retransmitMs?: number;
 }
 
 export class SnmpError extends Error {
@@ -215,9 +221,11 @@ export class SnmpError extends Error {
 /**
  * Fetch one OCTET STRING over SNMPv1.
  *
- * One request, one answer, one timeout: a printer that does not answer within
- * the budget is reported rather than retried, because the caller — a status
- * poll — is about to ask again anyway.
+ * One request, one answer, one timeout. A printer that does not answer within
+ * the budget is reported rather than retried past it, because the caller — a
+ * status poll — is about to ask again anyway; within the budget the datagram
+ * is resent at `retransmitMs`, because on a poor Wi-Fi link a lost request is
+ * the common way a read fails and the printer answers the next copy at once.
  */
 export function snmpGet(options: SnmpGetOptions): Promise<Buffer> {
   const port = options.port ?? 161;
@@ -233,6 +241,7 @@ export function snmpGet(options: SnmpGetOptions): Promise<Buffer> {
       if (done) return;
       done = true;
       clearTimeout(timer);
+      if (retransmit) clearInterval(retransmit);
       socket.close();
       outcome();
     };
@@ -240,6 +249,15 @@ export function snmpGet(options: SnmpGetOptions): Promise<Buffer> {
       () => finish(() => reject(new SnmpError(`No SNMP answer from ${options.host} within ${timeoutMs} ms.`))),
       timeoutMs,
     );
+    const send = (): void => {
+      socket.send(request, port, options.host, (error) => {
+        if (error) finish(() => reject(new SnmpError(`Could not send SNMP request: ${error.message}`)));
+      });
+    };
+    const retransmit =
+      options.retransmitMs && options.retransmitMs > 0 && options.retransmitMs < timeoutMs
+        ? setInterval(send, options.retransmitMs)
+        : null;
 
     socket.on('error', (error) => finish(() => reject(new SnmpError(`SNMP socket error: ${error.message}`))));
     socket.on('message', (datagram) => {
@@ -262,8 +280,6 @@ export function snmpGet(options: SnmpGetOptions): Promise<Buffer> {
         }
       });
     });
-    socket.send(request, port, options.host, (error) => {
-      if (error) finish(() => reject(new SnmpError(`Could not send SNMP request: ${error.message}`)));
-    });
+    send();
   });
 }

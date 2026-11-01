@@ -123,6 +123,8 @@ export class JobTracker {
   readonly #options: JobTrackerOptions;
   #job: JobRecord | null = null;
   #idle: ReturnType<typeof setTimeout> | null = null;
+  /** Writes to the printer not yet taken; the idle clock does not run while any is. */
+  #pending = 0;
 
   constructor(options: JobTrackerOptions) {
     this.#options = options;
@@ -158,7 +160,36 @@ export class JobTracker {
 
   #touch(): void {
     if (this.#idle) clearTimeout(this.#idle);
+    this.#idle = null;
+    if (this.#pending > 0) return;
     this.#idle = setTimeout(() => this.end('sent'), this.#options.idleMs);
+  }
+
+  /**
+   * The client is still at it — polling the printer's status, say — so the
+   * job is not idle, whatever the frames are doing. A no-op without a job.
+   */
+  touch(): void {
+    if (this.#job) this.#touch();
+  }
+
+  /**
+   * A write to the printer has started and not yet been taken. A printer on
+   * a poor link can take many seconds over one frame, and a job must not
+   * count as finished while its bytes are still going out.
+   */
+  hold(): void {
+    this.#pending += 1;
+    if (this.#job && this.#idle) {
+      clearTimeout(this.#idle);
+      this.#idle = null;
+    }
+  }
+
+  /** The write was taken (or failed); the idle clock runs again. */
+  release(): void {
+    this.#pending = Math.max(0, this.#pending - 1);
+    if (this.#job) this.#touch();
   }
 
   /** The client announced a job. Starts one, or relabels the one in flight. */
@@ -181,6 +212,7 @@ export class JobTracker {
   status(summary: StatusSummary): void {
     const job = this.#job;
     if (!job) return;
+    this.#touch();
     const note: JobStatusNote = {
       at: this.#now().toISOString(),
       statusType: summary.statusType,
@@ -207,6 +239,7 @@ export class JobTracker {
   end(outcome: JobOutcome, message?: string): JobRecord | null {
     if (this.#idle) clearTimeout(this.#idle);
     this.#idle = null;
+    this.#pending = 0;
     const job = this.#job;
     if (!job) return null;
     this.#job = null;

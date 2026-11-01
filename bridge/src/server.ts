@@ -105,12 +105,24 @@ export function createBridgeServer(options: BridgeServerOptions): BridgeServer {
     authTimeoutMs: config.authTimeoutMs,
     connectTimeoutMs: config.connectTimeoutMs,
     snmpTimeoutMs: config.snmpTimeoutMs,
+    snmpRetransmitMs: config.snmpRetransmitMs,
     recentJobs: config.recentJobs,
     jobIdleMs: config.jobIdleMs,
     ephemeral,
     simulator,
     snmpGet: options.snmpGet,
   };
+
+  // The keepalive: ping every client on an interval, and drop one that stops
+  // answering. See `wsPingMs` in config.ts for why.
+  const sessions = new Set<ClientSession>();
+  const heartbeat =
+    config.wsPingMs > 0
+      ? setInterval(() => {
+          for (const session of sessions) session.heartbeat();
+        }, config.wsPingMs)
+      : null;
+  heartbeat?.unref();
 
   server.on('upgrade', (req, socket, head) => {
     const url = new URL(req.url ?? '/', 'http://bridge.invalid');
@@ -129,6 +141,8 @@ export function createBridgeServer(options: BridgeServerOptions): BridgeServer {
     wss.handleUpgrade(req, socket, head, (ws) => {
       const remote = `${req.socket.remoteAddress ?? '?'}:${req.socket.remotePort ?? '?'}`;
       const session = new ClientSession(ws, sessionContext, remote);
+      sessions.add(session);
+      ws.once('close', () => sessions.delete(session));
       if (origin) log('debug', 'client origin', { session: session.id, origin });
     });
   });
@@ -155,6 +169,7 @@ export function createBridgeServer(options: BridgeServerOptions): BridgeServer {
     },
     stop() {
       return new Promise((resolve) => {
+        if (heartbeat) clearInterval(heartbeat);
         simulator.dispose();
         for (const client of wss.clients) client.terminate();
         wss.close();

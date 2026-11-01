@@ -68,6 +68,8 @@ export interface SessionContext {
   authTimeoutMs: number;
   connectTimeoutMs: number;
   snmpTimeoutMs: number;
+  /** Resend an unanswered SNMP request this often within the timeout; 0 never. */
+  snmpRetransmitMs: number;
   /** How many finished jobs the store keeps. */
   recentJobs: number;
   /** Frames quiet for this long end an unreported job. */
@@ -112,6 +114,8 @@ export class ClientSession {
   #closingByClient = false;
   #authTimer: ReturnType<typeof setTimeout> | null = null;
   #statusInFlight = false;
+  /** Pings sent since the client last answered one. */
+  #unansweredPings = 0;
 
   constructor(ws: WebSocket, ctx: SessionContext, remote: string) {
     this.#ws = ws;
@@ -148,6 +152,9 @@ export class ClientSession {
     });
     ws.on('close', (code, reason) => this.#teardown('socket', { code, reason: reason.toString() }));
     ws.on('error', (error) => this.#log('warn', 'websocket error', { error: error.message }));
+    ws.on('pong', () => {
+      this.#unansweredPings = 0;
+    });
 
     this.#authTimer = setTimeout(() => {
       if (!this.#token) {
@@ -162,6 +169,22 @@ export class ClientSession {
 
   get printerId(): string | null {
     return this.#printer?.id ?? null;
+  }
+
+  /**
+   * The keepalive, called by the server on its ping interval: ping the
+   * client, and drop one that has answered neither of the last two pings. A
+   * browser answers pings on its own, so a silent client is a dead one.
+   */
+  heartbeat(): void {
+    if (this.#ws.readyState !== this.#ws.OPEN) return;
+    if (this.#unansweredPings >= 2) {
+      this.#log('warn', 'client answered no ping; dropping it', { unanswered: this.#unansweredPings });
+      this.#ws.terminate();
+      return;
+    }
+    this.#unansweredPings += 1;
+    this.#ws.ping();
   }
 
   #log(level: LogLevel, message: string, data: Record<string, unknown>): void {
@@ -384,14 +407,19 @@ export class ClientSession {
       return;
     }
     const started = Date.now();
+    // The job is not idle while the printer is still taking the frame: over a
+    // poor link one can take many seconds, longer than the idle allowance.
+    this.#jobs.hold();
     socket.write(bytes, (error) => {
       if (error) {
         const code = (error as NodeJS.ErrnoException).code ?? error.message;
+        this.#jobs.release();
         this.#log('warn', 'write to printer failed', { bytes: bytes.length, error: code });
         this.#error('write-failed', `Writing to the printer failed: ${code}.`, 'ack');
         return;
       }
       this.#jobs.frame(meta, bytes.length);
+      this.#jobs.release();
       this.#log('debug', 'frame', { bytes: bytes.length, ms: Date.now() - started });
       this.#send({ type: 'ack', bytes: bytes.length });
     });
@@ -408,6 +436,9 @@ export class ClientSession {
       this.#error('bad-request', 'A status request is already in progress.', 'status-sent');
       return;
     }
+    // A client polling for completion is still on its job, however long the
+    // printer takes to confirm it.
+    this.#jobs.touch();
     const started = Date.now();
     switch (printer.statusMode) {
       case 'none':
@@ -435,6 +466,7 @@ export class ClientSession {
                 community: printer.snmpCommunity,
                 oid: BROTHER_STATUS_OID,
                 timeoutMs: this.#ctx.snmpTimeoutMs,
+                retransmitMs: this.#ctx.snmpRetransmitMs,
               });
           // Still the same printer on the same connection? A close in the
           // meantime makes the answer moot.

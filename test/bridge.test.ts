@@ -880,6 +880,25 @@ describe('printer over the bridge', () => {
     expect(server.last.statusRequests).toBe(1); // only the explicit query
   });
 
+  it('does not send the cancel sequence for a job whose first byte never went out', async () => {
+    const server = bridge({ connectFails: true });
+    const diagnostics = new DiagnosticsRecorder();
+    const printer = new BrotherQLPrinter(transport(server, 'ql810w', { lease: { idleMs: 10 } }), {
+      model: 'QL-810W',
+      diagnostics,
+    });
+    await printer.open();
+    await expect(printer.print(image(), { label: '62' })).rejects.toMatchObject({ reason: 'connect-failed' });
+    await settle();
+    // Nothing reached the printer, so there was nothing to take back — and no
+    // second attempt at an open that had just failed.
+    expect(server.last.written).toHaveLength(0);
+    expect(server.last.messages.filter((m) => m.type === 'open')).toHaveLength(1);
+    const trace = diagnostics.format().join('\n');
+    expect(trace).toContain('job-not-started');
+    expect(trace).not.toContain('job-cancelled');
+  });
+
   it('stops a job early when the printer reports an error mid-transfer', async () => {
     const server = bridge({
       onPrinterData: (bytes, session) => {

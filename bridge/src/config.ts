@@ -37,6 +37,21 @@ export interface BridgeConfig {
   connectTimeoutMs: number;
   /** Milliseconds to wait for an SNMP answer. Default 2000. */
   snmpTimeoutMs: number;
+  /**
+   * Milliseconds after which an unanswered SNMP request is sent again, within
+   * the timeout; 0 sends it once. Default 700. A datagram lost on a poor
+   * Wi-Fi link is the common way a status read fails, and a second one costs
+   * nothing.
+   */
+  snmpRetransmitMs: number;
+  /**
+   * Milliseconds between WebSocket pings to each client; 0 disables them.
+   * Default 25000. A reverse proxy in front of the bridge cuts a connection
+   * that carries nothing for a while (Synology's defaults to 60 s), which an
+   * idle kiosk's would; the pings keep it open. A client that answers none
+   * of two pings in a row is dropped.
+   */
+  wsPingMs: number;
   /** Lowest level written to stdout; the in-memory buffer keeps every level. Default info. */
   logLevel: LogLevel;
   /** Log records kept in memory for the diagnostics bundle. Default 2000. */
@@ -100,6 +115,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): BridgeConfig {
     authTimeoutMs: integer(env.AUTH_TIMEOUT_MS, 10_000, 'AUTH_TIMEOUT_MS'),
     connectTimeoutMs: integer(env.CONNECT_TIMEOUT_MS, 5_000, 'CONNECT_TIMEOUT_MS'),
     snmpTimeoutMs: integer(env.SNMP_TIMEOUT_MS, 2_000, 'SNMP_TIMEOUT_MS'),
+    snmpRetransmitMs: integer(env.SNMP_RETRANSMIT_MS, 700, 'SNMP_RETRANSMIT_MS'),
+    wsPingMs: integer(env.WS_PING_MS, 25_000, 'WS_PING_MS'),
     logLevel,
     logBuffer: integer(env.LOG_BUFFER, 2_000, 'LOG_BUFFER'),
     recentJobs: integer(env.RECENT_JOBS, 5, 'RECENT_JOBS'),
