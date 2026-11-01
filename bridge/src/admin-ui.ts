@@ -47,6 +47,14 @@ export const ADMIN_PAGE = /* html */ `<!doctype html>
   details { margin-top: 8px; }
   summary { cursor: pointer; color: var(--muted); }
   .pill { display:inline-block; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--line); font-size: 12px; }
+  .sim-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; margin-top: 12px; }
+  fieldset { border: 1px solid var(--line); border-radius: 8px; padding: 8px 14px 12px; margin: 0; min-width: 0; }
+  legend { color: var(--muted); font-size: 13px; font-weight: 600; padding: 0 4px; }
+  fieldset label { display: flex; gap: 8px; align-items: flex-start; margin: 8px 0; }
+  fieldset label > span { flex: 1; }
+  fieldset label.stack { flex-direction: column; align-items: stretch; gap: 4px; font-size: 13px; color: var(--muted); }
+  fieldset input[type=checkbox] { width: 16px; height: 16px; margin: 0; }
+  #sim-label { display: block; border: 1px solid var(--line); background: #fff; image-rendering: pixelated; margin-top: 8px; }
 </style>
 </head>
 <body>
@@ -126,6 +134,37 @@ export const ADMIN_PAGE = /* html */ `<!doctype html>
       </div>
     </section>
 
+    <section id="simulator-card">
+      <h2>Simulated printer</h2>
+      <p class="muted">For debugging a page without a printer to hand. While it is enabled, <strong>Simulated QL-810W</strong> is listed to every client like a registered printer: it takes jobs, answers status the way a QL-810W does over SNMP, and keeps the last label it was sent. The switches are the faults a real printer has on a busy day; how a page recovers from each is what this is for. Disable it before anyone prints for real.</p>
+      <p class="actions"><button id="sim-toggle" class="primary">Enable</button> <span id="sim-state" class="muted"></span></p>
+      <div id="sim-panel" class="hidden">
+        <div class="sim-grid">
+          <fieldset><legend>The printer</legend>
+            <label><input type="checkbox" id="sim-power"> <span>Switched on</span></label>
+            <label><input type="checkbox" id="sim-coverOpen"> <span>Cover open</span></label>
+            <label><input type="checkbox" id="sim-noMedia"> <span>Out of media</span></label>
+            <label><input type="checkbox" id="sim-snmpSilent"> <span>Quiet on SNMP — status reads time out</span></label>
+            <label><input type="checkbox" id="sim-refuseJobs"> <span>Resets every connection — wedged</span></label>
+            <label><input type="checkbox" id="sim-checkMedia"> <span>Refuses a job rasterised for another roll — the <em>Replace media</em> error</span></label>
+          </fieldset>
+          <fieldset><legend>The roll, and timing</legend>
+            <label class="stack">Roll loaded <select id="sim-media"></select></label>
+            <label class="stack">Printing time per page, ms <input type="number" id="sim-printMs" min="0" max="60000" step="100"></label>
+            <label class="stack">Delay before each frame is taken, ms — a slow printer <input type="number" id="sim-frameDelayMs" min="0" max="10000" step="10"></label>
+            <p class="actions"><button id="sim-restart">Restart — off for 5 s</button><button id="sim-reset">Reset counters</button></p>
+          </fieldset>
+        </div>
+        <p id="sim-status" class="mono muted"></p>
+        <p id="sim-counters" class="muted"></p>
+        <p id="sim-lastjob" class="muted"></p>
+        <div id="sim-label-wrap" class="hidden">
+          <p class="actions"><strong>Last label</strong> <span id="sim-label-meta" class="muted"></span> <button id="sim-rotate">Rotate</button> <button id="sim-download">Download PNG</button></p>
+          <canvas id="sim-label" width="1" height="1"></canvas>
+        </div>
+      </div>
+    </section>
+
     <section>
       <h2>When something goes wrong</h2>
       <p class="muted">The bundle holds the bridge's configuration (without secrets), its printers and their counters, the recent prints, and the last couple of thousand log records including every frame and status packet — enough to diagnose a problem without reproducing it. Attach it to a bug report.</p>
@@ -180,7 +219,8 @@ export const ADMIN_PAGE = /* html */ `<!doctype html>
       return '<tr><td>' + esc(p.name) + '</td><td class="mono">' + esc(p.host) + ':' + esc(p.port) + '</td><td>' + esc(p.model || '—') + '</td>' +
       '<td><span class="pill">' + esc(p.statusMode) + '</span></td><td>' + (p.busy ? '<span class="warn">printing</span>' : '<span class="ok">idle</span>') + '</td>' +
       '<td>' + num(st.jobs) + '</td><td>' + labels + '</td><td>' + faults + '</td>' +
-      '<td class="actions"><button data-probe="' + esc(p.id) + '">Probe</button><button data-test="' + esc(p.id) + '">Test label</button><button data-edit="' + esc(p.id) + '">Edit</button><button class="danger" data-delete="' + esc(p.id) + '">Remove</button></td></tr>';
+      '<td class="actions"><button data-probe="' + esc(p.id) + '">Probe</button><button data-test="' + esc(p.id) + '">Test label</button>' +
+      (p.id === 'simulated' ? '<span class="pill">simulated</span>' : '<button data-edit="' + esc(p.id) + '">Edit</button><button class="danger" data-delete="' + esc(p.id) + '">Remove</button>') + '</td></tr>';
     }).join('')
       : '<tr><td colspan="9" class="muted">No printers yet. Add one below; the bridge needs its address on the network.</td></tr>';
     $('printers').dataset.records = JSON.stringify(printers);
@@ -214,8 +254,8 @@ export const ADMIN_PAGE = /* html */ `<!doctype html>
   async function signedIn() {
     $('login').classList.add('hidden');
     $('app').classList.remove('hidden');
-    await Promise.all([loadTokens(), loadPrinters(), loadJobs()]).catch(fail);
-    if (!refresh) refresh = setInterval(() => { if (token) Promise.all([loadJobs(), loadPrinters()]).catch(() => {}); }, 5000);
+    await Promise.all([loadTokens(), loadPrinters(), loadJobs(), loadSimulator()]).catch(fail);
+    if (!refresh) refresh = setInterval(() => { if (token) Promise.all([loadJobs(), loadPrinters(), loadSimulator()]).catch(() => {}); }, 5000);
   }
 
   $('diagnostics').addEventListener('click', async () => {
@@ -413,7 +453,7 @@ export const ADMIN_PAGE = /* html */ `<!doctype html>
     } finally {
       if (printer) await printer.close().catch(() => {});
       button.disabled = false;
-      loadJobs().catch(() => {}); loadPrinters().catch(() => {});
+      loadJobs().catch(() => {}); loadPrinters().catch(() => {}); loadSimulator().catch(() => {});
     }
   });
 
@@ -463,6 +503,132 @@ export const ADMIN_PAGE = /* html */ `<!doctype html>
         box.innerHTML = '<span class="bad">' + esc(error.message) + '</span>';
       }
     }
+  });
+
+  // --- The simulated printer -----------------------------------------------
+  let sim = null, simLabelAt = null, simLabel = null;
+  let simRotate = 0;
+  try { simRotate = Number(localStorage.getItem('brother-ql-bridge-sim-rotate')) || 0; } catch {}
+  const SIM_FAULTS = ['coverOpen', 'noMedia', 'snmpSilent', 'refuseJobs'];
+  const SIM_FAULT_WORDS = { coverOpen: 'cover open', noMedia: 'out of media', snmpSilent: 'quiet on SNMP', refuseJobs: 'resetting connections' };
+  const typing = (el) => el && el.tagName === 'INPUT' && el.type === 'number' && el === document.activeElement;
+
+  function renderSimulator(s) {
+    sim = s;
+    const toggle = $('sim-toggle');
+    toggle.textContent = s.enabled ? 'Disable' : 'Enable';
+    toggle.className = s.enabled ? 'danger' : 'primary';
+    $('sim-panel').classList.toggle('hidden', !s.enabled);
+    const faults = SIM_FAULTS.filter((k) => s.faults[k]).map((k) => SIM_FAULT_WORDS[k]);
+    if (s.wrongMedia) faults.push('Replace media error');
+    $('sim-state').textContent = !s.enabled ? 'Not listed to clients.'
+      : !s.power ? (s.restartingUntil ? 'Off, restarting…' : 'Switched off.')
+      : 'Listed as “' + s.name + '”: on, ' + s.phase + (faults.length ? '; ' + faults.join(', ') : '') + '.';
+    if (!s.enabled) return;
+    $('sim-power').checked = s.power;
+    for (const k of SIM_FAULTS) $('sim-' + k).checked = s.faults[k];
+    $('sim-checkMedia').checked = s.checkMedia;
+    const media = $('sim-media');
+    const wanted = s.presets.map((p) => p.id).concat(s.mediaPreset === 'custom' ? ['custom'] : []).join('|');
+    if (media.dataset.options !== wanted) {
+      media.innerHTML = s.presets.map((p) => '<option value="' + esc(p.id) + '">' + esc(p.label) + '</option>').join('') +
+        (s.mediaPreset === 'custom' ? '<option value="custom">Custom: ' + esc(s.media.widthMm) + (s.media.dieCut ? ' × ' + esc(s.media.lengthMm) : '') + ' mm</option>' : '');
+      media.dataset.options = wanted;
+    }
+    media.value = s.mediaPreset;
+    if (!typing($('sim-printMs'))) $('sim-printMs').value = s.printMs;
+    if (!typing($('sim-frameDelayMs'))) $('sim-frameDelayMs').value = s.frameDelayMs;
+    const st = s.status;
+    $('sim-status').textContent = st
+      ? 'Status: ' + st.hex + ' — ' + st.mediaType + (st.mediaWidthMm ? ' ' + st.mediaWidthMm + ' mm' : '') + (st.mediaLengthMm ? ' × ' + st.mediaLengthMm + ' mm' : '') + ', phase ' + st.phase + (st.hasErrors ? ', error flags set' : '')
+      : 'Status: no answer while off.';
+    const c = s.counters;
+    $('sim-counters').textContent = num(c.connections) + ' connections (' + num(s.openConnections) + ' open), ' + num(c.frames) + ' frames, ' + size(c.bytes) + ', ' + num(c.jobs) + ' jobs, ' + num(c.pages) + ' pages printed, ' + num(c.statusReads) + ' status reads.';
+    const j = s.lastJob;
+    $('sim-lastjob').textContent = j
+      ? 'Last job ' + when(j.finishedAt) + ': ' + num(j.pages) + ' page' + (j.pages === 1 ? '' : 's') + ', ' + num(j.pagesPrinted) + ' printed, ' + num(j.lines) + ' raster lines, ' + size(j.bytes) + (j.compression ? ', compressed' : '') +
+        (j.declared ? ', rasterised for ' + (j.declared.widthMm ?? '?') + (j.declared.lengthMm ? ' × ' + j.declared.lengthMm : '') + ' mm' : '') + ' — ' + j.outcome + '.'
+      : 'No jobs yet.';
+    $('sim-label-wrap').classList.toggle('hidden', !s.lastLabel);
+    if (s.lastLabel && s.lastLabel.at !== simLabelAt) { simLabelAt = s.lastLabel.at; loadSimLabel().catch(() => {}); }
+  }
+
+  async function loadSimulator() {
+    const { simulator } = await api('GET', '/api/admin/simulator');
+    renderSimulator(simulator);
+  }
+
+  async function simPut(body) {
+    try { const { simulator } = await api('PUT', '/api/admin/simulator', body); renderSimulator(simulator); await loadPrinters(); }
+    catch (error) { fail(error); loadSimulator().catch(() => {}); }
+  }
+
+  $('sim-toggle').addEventListener('click', () => { if (sim) simPut({ enabled: !sim.enabled }); });
+  $('sim-power').addEventListener('change', (e) => simPut({ power: e.target.checked }));
+  for (const k of SIM_FAULTS) $('sim-' + k).addEventListener('change', (e) => simPut({ faults: { [k]: e.target.checked } }));
+  $('sim-checkMedia').addEventListener('change', (e) => simPut({ checkMedia: e.target.checked }));
+  $('sim-media').addEventListener('change', (e) => { if (e.target.value !== 'custom') simPut({ media: e.target.value }); });
+  $('sim-printMs').addEventListener('change', (e) => simPut({ printMs: Number(e.target.value) }));
+  $('sim-frameDelayMs').addEventListener('change', (e) => simPut({ frameDelayMs: Number(e.target.value) }));
+  $('sim-restart').addEventListener('click', async () => {
+    try { const { simulator } = await api('POST', '/api/admin/simulator/restart', { ms: 5000 }); renderSimulator(simulator); setTimeout(() => loadSimulator().catch(() => {}), 5500); } catch (error) { fail(error); }
+  });
+  $('sim-reset').addEventListener('click', async () => {
+    try { const { simulator } = await api('POST', '/api/admin/simulator/reset'); simLabelAt = null; simLabel = null; renderSimulator(simulator); } catch (error) { fail(error); }
+  });
+
+  async function loadSimLabel() {
+    const { label } = await api('GET', '/api/admin/simulator/label');
+    simLabel = label;
+    $('sim-label-meta').textContent = label.widthPx + ' × ' + label.height + ' dots, ' + when(label.at);
+    drawSimLabel();
+  }
+
+  /**
+   * The bitmap as it comes off the printer: one row per raster line down the
+   * tape, 8 dots a byte. The head lays a row down right to left — byte 0's
+   * high bit is the rightmost dot — so the row is mirrored to read as the
+   * label does. Continuous-tape labels are rasterised sideways; Rotate turns them.
+   */
+  function drawSimLabel() {
+    const label = simLabel; if (!label) return;
+    const unpack = (b64) => Uint8Array.from(atob(b64), (ch) => ch.charCodeAt(0));
+    const black = unpack(label.black), red = label.red ? unpack(label.red) : null;
+    const w = label.widthPx, h = label.height;
+    const off = document.createElement('canvas'); off.width = w; off.height = h;
+    const octx = off.getContext('2d');
+    const img = octx.createImageData(w, h), d = img.data;
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const i = y * label.rowBytes + (x >> 3), bit = 0x80 >> (x & 7), k = (y * w + (w - 1 - x)) * 4;
+        const isBlack = black[i] & bit, isRed = red && (red[i] & bit);
+        d[k] = isBlack ? 0 : isRed ? 204 : 255; d[k + 1] = isBlack ? 0 : isRed ? 34 : 255; d[k + 2] = isBlack ? 0 : isRed ? 34 : 255; d[k + 3] = 255;
+      }
+    }
+    octx.putImageData(img, 0, 0);
+    const canvas = $('sim-label'), turned = simRotate % 180 !== 0;
+    canvas.width = turned ? h : w; canvas.height = turned ? w : h;
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.save(); ctx.translate(canvas.width / 2, canvas.height / 2); ctx.rotate(simRotate * Math.PI / 180); ctx.drawImage(off, -w / 2, -h / 2); ctx.restore();
+    const scale = Math.min(1, 900 / canvas.width, 480 / canvas.height);
+    canvas.style.width = Math.round(canvas.width * scale) + 'px';
+    canvas.style.height = Math.round(canvas.height * scale) + 'px';
+  }
+
+  $('sim-rotate').addEventListener('click', () => {
+    simRotate = (simRotate + 90) % 360;
+    try { localStorage.setItem('brother-ql-bridge-sim-rotate', String(simRotate)); } catch {}
+    drawSimLabel();
+  });
+  $('sim-download').addEventListener('click', () => {
+    $('sim-label').toBlob((blob) => {
+      if (!blob) return;
+      const url = URL.createObjectURL(blob), a = document.createElement('a');
+      a.href = url; a.download = 'simulated-label-' + (simLabel ? simLabel.at.replace(/[:.]/g, '-') : 'now') + '.png';
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    }, 'image/png');
   });
 
   if (token) {

@@ -20,7 +20,7 @@
  */
 
 import { randomBytes } from 'node:crypto';
-import { connect, type Socket } from 'node:net';
+import { connect } from 'node:net';
 
 import type { WebSocket } from 'ws';
 
@@ -34,9 +34,10 @@ import {
   type BridgePrinterInfo,
   type BridgeServerMessage,
 } from './protocol.js';
+import type { PrinterLink, PrinterSimulator } from './simulator.js';
 import { BROTHER_STATUS_OID, snmpGet } from './snmp.js';
 import { isStatusPacket, summarizeStatus } from './status.js';
-import type { PrinterRecord, Store, TokenRecord } from './store.js';
+import { SIMULATED_PRINTER_ID, type PrinterRecord, type Store, type TokenRecord } from './store.js';
 import { tokenMatches } from './tokens.js';
 
 const STATUS_REQUEST = Buffer.from([0x1b, 0x69, 0x53]);
@@ -73,6 +74,8 @@ export interface SessionContext {
   jobIdleMs: number;
   /** Short-lived tokens the admin API mints for its own page. */
   ephemeral?: EphemeralTokens;
+  /** The simulated printer, which stands in for the network when a session opens it. */
+  simulator?: PrinterSimulator;
   /** Replaceable for tests. */
   snmpGet?: typeof snmpGet;
 }
@@ -104,7 +107,7 @@ export class ClientSession {
   /** The name the client gave itself on auth, for the log. */
   #client: string | undefined;
   #printer: PrinterRecord | null = null;
-  #socket: Socket | null = null;
+  #socket: PrinterLink | null = null;
   /** Set while `close` from the client is being honoured, so the socket's own close is not reported as the printer's. */
   #closingByClient = false;
   #authTimer: ReturnType<typeof setTimeout> | null = null;
@@ -320,7 +323,8 @@ export class ClientSession {
       statusMode: record.statusMode,
     });
 
-    const socket = connect({ host: record.host, port: record.port });
+    const simulator = record.id === SIMULATED_PRINTER_ID ? this.#ctx.simulator : undefined;
+    const socket: PrinterLink = simulator ? simulator.connect() : connect({ host: record.host, port: record.port });
     this.#socket = socket;
     socket.setNoDelay(true);
     socket.setTimeout(this.#ctx.connectTimeoutMs);
@@ -422,13 +426,16 @@ export class ClientSession {
       case 'snmp': {
         this.#statusInFlight = true;
         const get = this.#ctx.snmpGet ?? snmpGet;
+        const simulator = printer.id === SIMULATED_PRINTER_ID ? this.#ctx.simulator : undefined;
         try {
-          const value = await get({
-            host: printer.host,
-            community: printer.snmpCommunity,
-            oid: BROTHER_STATUS_OID,
-            timeoutMs: this.#ctx.snmpTimeoutMs,
-          });
+          const value = simulator
+            ? await simulator.readStatus(this.#ctx.snmpTimeoutMs)
+            : await get({
+                host: printer.host,
+                community: printer.snmpCommunity,
+                oid: BROTHER_STATUS_OID,
+                timeoutMs: this.#ctx.snmpTimeoutMs,
+              });
           // Still the same printer on the same connection? A close in the
           // meantime makes the answer moot.
           if (this.#printer !== printer) return;

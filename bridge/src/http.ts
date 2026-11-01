@@ -24,7 +24,8 @@ import { probePrinter, type ProbeResult } from './probe.js';
 import { BRIDGE_PROTOCOL_VERSION } from './protocol.js';
 import type { PrinterLocks } from './session.js';
 import { describePrinter } from './session.js';
-import { ValidationError, type PrinterInput, type Store, type TokenRecord } from './store.js';
+import type { PrinterSimulator, SimulatorInput } from './simulator.js';
+import { SIMULATED_PRINTER_ID, ValidationError, type PrinterInput, type Store, type TokenRecord } from './store.js';
 import { bearerFrom, generateToken, hashToken, tokenHint, tokenMatches } from './tokens.js';
 
 export interface HttpContext {
@@ -36,6 +37,8 @@ export interface HttpContext {
   startedAt?: Date;
   /** Short-lived tokens for the admin page's own printing. */
   ephemeral?: EphemeralTokens;
+  /** The simulated printer, controlled under `/api/admin/simulator`. */
+  simulator?: PrinterSimulator;
   /**
    * The printer library bundled for the admin page (`npm run build` writes it
    * to `dist/public/admin-lib.js`); served at `/admin/lib.js`.
@@ -287,6 +290,7 @@ export function createHttpHandler(ctx: HttpContext): (req: IncomingMessage, res:
           })),
           tokens: store.tokens.map(publicToken),
           jobs: store.jobs,
+          simulator: ctx.simulator?.describe() ?? null,
           logs: log.recent(),
         };
         const payload = JSON.stringify(bundle, null, 2);
@@ -298,6 +302,47 @@ export function createHttpHandler(ctx: HttpContext): (req: IncomingMessage, res:
         });
         res.end(payload);
         return;
+      }
+
+      // The simulated printer: its state, its controls, and the last label it
+      // "printed". Enabling it lists it to every client; the printers API
+      // refuses to edit or remove it, because it is not a record but a device.
+      if (resource === 'simulator') {
+        const simulator = ctx.simulator;
+        if (!simulator) throw new HttpError(503, 'The simulated printer is not available.');
+        if (!id && method === 'GET') {
+          json(res, 200, { simulator: simulator.describe() });
+          return;
+        }
+        if (!id && method === 'PUT') {
+          const input = (await readBody(req)) as SimulatorInput;
+          await simulator.update(input);
+          json(res, 200, { simulator: simulator.describe() });
+          return;
+        }
+        if (id === 'label' && !action && method === 'GET') {
+          const label = simulator.lastLabel();
+          if (!label) throw new HttpError(404, 'The simulated printer has not printed anything yet.');
+          json(res, 200, { label });
+          return;
+        }
+        if (id === 'restart' && !action && method === 'POST') {
+          const body = (await readBody(req)) as { ms?: unknown };
+          const ms = body.ms === undefined ? 5000 : body.ms;
+          if (typeof ms !== 'number' || !Number.isInteger(ms) || ms < 0 || ms > 600_000) {
+            throw new HttpError(400, 'ms must be an integer between 0 and 600000.');
+          }
+          simulator.restart(ms);
+          json(res, 200, { simulator: simulator.describe() });
+          return;
+        }
+        if (id === 'reset' && !action && method === 'POST') {
+          simulator.reset();
+          json(res, 200, { simulator: simulator.describe() });
+          return;
+        }
+        if (id && !['label', 'restart', 'reset'].includes(id)) throw new HttpError(404, 'Not found.');
+        throw new HttpError(405, 'Method not allowed.');
       }
 
       if (resource === 'tokens' && id === 'ephemeral' && method === 'POST') {
@@ -364,6 +409,9 @@ export function createHttpHandler(ctx: HttpContext): (req: IncomingMessage, res:
           json(res, 201, { printer: { ...record, busy: false } });
           return;
         }
+        if (id === SIMULATED_PRINTER_ID && (method === 'PUT' || method === 'DELETE')) {
+          throw new HttpError(400, 'The simulated printer is controlled from the simulator section, not edited here.');
+        }
         if (id && !action && method === 'PUT') {
           const body = (await readBody(req)) as PrinterInput;
           const record = await store.updatePrinter(id, body);
@@ -384,7 +432,10 @@ export function createHttpHandler(ctx: HttpContext): (req: IncomingMessage, res:
         if (id && action === 'probe' && method === 'POST') {
           const record = store.findPrinter(id);
           if (!record) throw new HttpError(404, 'No such printer.');
-          const result = await probe(record);
+          const result =
+            record.id === SIMULATED_PRINTER_ID && ctx.simulator
+              ? ctx.simulator.probe(config.snmpTimeoutMs)
+              : await probe(record);
           json(res, 200, { probe: result });
           return;
         }

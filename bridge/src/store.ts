@@ -48,6 +48,8 @@ export interface State {
   jobs: JobRecord[];
   /** Per-printer counters, by printer id. */
   stats: Record<string, PrinterStats>;
+  /** The simulated printer (`simulator.ts`): listed to clients while enabled. */
+  simulator?: { enabled: boolean };
 }
 
 export const STATE_FILE = 'bridge.json';
@@ -55,6 +57,26 @@ export const STATE_FILE = 'bridge.json';
 function emptyState(): State {
   return { version: 1, tokens: [], printers: [], jobs: [], stats: {} };
 }
+
+/**
+ * The simulated printer's fixed identity. The id is a constant so a kiosk
+ * that picked it keeps finding it across restarts, like any registered
+ * printer; the record itself is never written to the state file.
+ */
+export const SIMULATED_PRINTER_ID = 'simulated';
+export const SIMULATED_PRINTER_NAME = 'Simulated QL-810W';
+
+const SIMULATED_PRINTER_RECORD: PrinterRecord = Object.freeze({
+  id: SIMULATED_PRINTER_ID,
+  name: SIMULATED_PRINTER_NAME,
+  host: 'simulated',
+  port: 9100,
+  model: 'QL-810W',
+  statusMode: 'snmp',
+  snmpCommunity: 'public',
+  createdAt: '2026-01-01T00:00:00.000Z',
+  updatedAt: '2026-01-01T00:00:00.000Z',
+});
 
 /** What an administrator supplies to add or edit a printer. */
 export interface PrinterInput {
@@ -167,6 +189,9 @@ export class Store {
       stats: parsed.stats && typeof parsed.stats === 'object' ? parsed.stats : {},
     };
     if (parsed.adminTokenHash) state.adminTokenHash = parsed.adminTokenHash;
+    if (parsed.simulator && typeof parsed.simulator === 'object' && typeof parsed.simulator.enabled === 'boolean') {
+      state.simulator = { enabled: parsed.simulator.enabled };
+    }
     return state;
   }
 
@@ -184,8 +209,21 @@ export class Store {
     return this.#state.tokens;
   }
 
+  /** Every printer a client may open: the registered ones, and the simulated one while it is enabled. */
   get printers(): readonly PrinterRecord[] {
-    return this.#state.printers;
+    return this.#state.simulator?.enabled
+      ? [...this.#state.printers, SIMULATED_PRINTER_RECORD]
+      : this.#state.printers;
+  }
+
+  get simulatorEnabled(): boolean {
+    return this.#state.simulator?.enabled === true;
+  }
+
+  async setSimulatorEnabled(enabled: boolean): Promise<void> {
+    if (this.simulatorEnabled === enabled) return;
+    this.#state.simulator = { enabled };
+    await this.#save();
   }
 
   get jobs(): readonly JobRecord[] {
@@ -244,7 +282,7 @@ export class Store {
   }
 
   findPrinter(id: string): PrinterRecord | undefined {
-    return this.#state.printers.find((printer) => printer.id === id);
+    return this.printers.find((printer) => printer.id === id);
   }
 
   async addPrinter(input: PrinterInput): Promise<PrinterRecord> {

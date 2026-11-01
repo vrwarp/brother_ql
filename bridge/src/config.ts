@@ -45,6 +45,21 @@ export interface BridgeConfig {
   recentJobs: number;
   /** Milliseconds without frames after which an unreported job counts as sent. Default 3000. */
   jobIdleMs: number;
+  /**
+   * Enable the simulated printer at start-up (`SIMULATED_PRINTER=true`). The
+   * admin page can enable and disable it at any time regardless; this is for
+   * a debugging deployment or a test harness that wants it there from the
+   * first request.
+   */
+  simulatedPrinter: boolean;
+}
+
+function flag(value: string | undefined, name: string): boolean {
+  if (value === undefined || value === '') return false;
+  const normalised = value.trim().toLowerCase();
+  if (['1', 'true', 'yes', 'on'].includes(normalised)) return true;
+  if (['0', 'false', 'no', 'off'].includes(normalised)) return false;
+  throw new Error(`${name} must be true or false, got "${value}".`);
 }
 
 function integer(value: string | undefined, fallback: number, name: string): number {
@@ -89,6 +104,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): BridgeConfig {
     logBuffer: integer(env.LOG_BUFFER, 2_000, 'LOG_BUFFER'),
     recentJobs: integer(env.RECENT_JOBS, 5, 'RECENT_JOBS'),
     jobIdleMs: integer(env.JOB_IDLE_MS, 3_000, 'JOB_IDLE_MS'),
+    simulatedPrinter: flag(env.SIMULATED_PRINTER, 'SIMULATED_PRINTER'),
   };
 }
 

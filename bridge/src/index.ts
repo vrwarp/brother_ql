@@ -4,7 +4,7 @@
 
 import { loadConfig } from './config.js';
 import { createLogger } from './log.js';
-import { createBridgeServer, ensureAdminToken } from './server.js';
+import { createBridgeServer, ensureAdminToken, ensureSimulator } from './server.js';
 import { Store } from './store.js';
 
 async function main(): Promise<void> {
@@ -12,6 +12,7 @@ async function main(): Promise<void> {
   const log = createLogger({ stdoutLevel: config.logLevel, capacity: config.logBuffer });
   const store = await Store.open(config.dataDir);
   await ensureAdminToken(config, store, log);
+  await ensureSimulator(config, store, log);
   const bridge = createBridgeServer({ config, store, log });
   await bridge.start();
 
