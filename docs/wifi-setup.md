@@ -10,9 +10,9 @@ It is feasible, and it fits the library as it stands. Two independent
 reverse-engineering efforts agree on the mechanism:
 
 - **Brother's macOS `USBWirelessSetupWizard` 1.2.3** (the tool Brother ships
-  for the QL-810W and QL-820NWB), disassembled in
-  [`wifi-protocol-reference.md`](./wifi-protocol-reference.md). Every byte
-  there is read from the binary and tagged with its confidence.
+  for the QL-810W and QL-820NWB), disassembled in a protocol reference that
+  is kept outside this repository. Every byte there is read from the binary
+  and tagged with its confidence.
 - **Brother's Android iPrint&Label app**, disassembled by the
   `mb-cli-printer` project, whose read-only half was then run against a
   QL-1110NWB. See [Sources](#sources).
@@ -54,9 +54,8 @@ no-code fallbacks and the way back if a bad credential is applied.
 
 ## The protocol
 
-The full byte-level reference is
-[`wifi-protocol-reference.md`](./wifi-protocol-reference.md) (the macOS
-wizard). This section is the working synthesis of it with the Android
+The full byte-level reference for the macOS wizard is kept outside this
+repository. This section is the working synthesis of it with the Android
 findings, written for the implementer. Confidence labels follow the
 reference: `[V]` read from a binary, `[HW]` must be confirmed on a printer.
 
@@ -412,10 +411,9 @@ comment. `brother-label-settings` was consulted for context only.
 
 ## Sources
 
-- [`wifi-protocol-reference.md`](./wifi-protocol-reference.md): disassembly
-  of Brother's `SetupWizard.app` 1.10.4 and the nested
+- Disassembly notes on Brother's `SetupWizard.app` 1.10.4 and the nested
   `USBWirelessSetupWizard` 1.2.3 for the QL-810W and QL-820NWB, with
-  addresses and confidence labels per claim.
+  addresses and confidence labels per claim. Not committed here.
 - MakersBrain/mb-cli-printer, `docs/brother-wireless-config.md` and
   `mbprint/wireless.py` (commit `a300e4c`, 2026-08-29): the reverse
   engineering of iPrint&Label's `InfrastructureWiFiSetter`.
