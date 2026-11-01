@@ -16,12 +16,14 @@ import { originAllowedForRequest } from './origin.js';
 import { createHttpHandler, type HttpContext } from './http.js';
 import type { Logger } from './log.js';
 import { ClientSession, PrinterLocks, type SessionContext } from './session.js';
+import { PrinterSimulator } from './simulator.js';
 import type { Store } from './store.js';
 import { generateToken, hashToken } from './tokens.js';
 
 export interface BridgeServer {
   readonly server: HttpServer;
   readonly locks: PrinterLocks;
+  readonly simulator: PrinterSimulator;
   /** Listen on the configured host and port (or the given port, e.g. 0 for tests). */
   start(port?: number): Promise<AddressInfo>;
   stop(): Promise<void>;
@@ -58,9 +60,21 @@ export async function ensureAdminToken(config: BridgeConfig, store: Store, log: 
   });
 }
 
+/**
+ * Honour `SIMULATED_PRINTER` from the environment: enable the simulated
+ * printer if it is not already. The admin page may still disable it later;
+ * the next start enables it again.
+ */
+export async function ensureSimulator(config: BridgeConfig, store: Store, log: Logger): Promise<void> {
+  if (!config.simulatedPrinter || store.simulatorEnabled) return;
+  await store.setSimulatorEnabled(true);
+  log('warn', 'simulated printer enabled by SIMULATED_PRINTER; every client will see it', {});
+}
+
 export function createBridgeServer(options: BridgeServerOptions): BridgeServer {
   const { config, store, log } = options;
   const locks = new PrinterLocks();
+  const simulator = new PrinterSimulator({ store, log });
 
   const startedAt = new Date();
   const ephemeral = new EphemeralTokens();
@@ -72,6 +86,7 @@ export function createBridgeServer(options: BridgeServerOptions): BridgeServer {
     probe: options.probe,
     startedAt,
     ephemeral,
+    simulator,
     adminLibPath: options.adminLibPath,
   });
   const server: HttpServer =
@@ -93,6 +108,7 @@ export function createBridgeServer(options: BridgeServerOptions): BridgeServer {
     recentJobs: config.recentJobs,
     jobIdleMs: config.jobIdleMs,
     ephemeral,
+    simulator,
     snmpGet: options.snmpGet,
   };
 
@@ -120,6 +136,7 @@ export function createBridgeServer(options: BridgeServerOptions): BridgeServer {
   return {
     server,
     locks,
+    simulator,
     start(port = config.port) {
       return new Promise((resolve, reject) => {
         server.once('error', reject);
@@ -138,6 +155,7 @@ export function createBridgeServer(options: BridgeServerOptions): BridgeServer {
     },
     stop() {
       return new Promise((resolve) => {
+        simulator.dispose();
         for (const client of wss.clients) client.terminate();
         wss.close();
         server.closeAllConnections?.();

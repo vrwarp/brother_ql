@@ -103,6 +103,57 @@ The page follows the system colour scheme and fits a phone. The screenshots
 are regenerated with `node scripts/screenshots.mjs` after `npm run build`
 (needs Playwright on the path).
 
+## A simulated printer, for debugging
+
+The dashboard's **Simulated printer** card switches on a printer that does not
+exist. While it is enabled, every client sees **Simulated QL-810W** in the
+list beside the real printers, can open it, print to it and read its status,
+and the bridge logs its jobs like any other's. Nothing on the wire differs:
+the session relays the client's frames into an in-process stand-in instead of
+a TCP socket, and reads its 32 byte status block instead of asking SNMP. The
+stand-in parses the raster stream the way the printer does — the `ESC i …`
+settings, the lines, the print commands — counts the pages, and keeps the last
+label as a bitmap, which the card draws (rotate it, download it as PNG) so
+you can see what a page actually sent.
+
+The switches are the faults a real printer has on a busy day, and how a page
+recovers from each is what the simulator is for:
+
+- **Switched on** — off, the printer refuses connections and status reads
+  time out, as an unplugged one does. **Restart** switches it off for five
+  seconds and back on, with any job in flight dropped mid-way.
+- **Cover open** and **Out of media** — the status block carries the error
+  bits (`Cover opened`, `No media`) and nothing prints until cleared.
+- **Quiet on SNMP** — the data path works but every status read times out,
+  as a printer whose radio has dozed does.
+- **Resets every connection** — port 9100 accepts and hangs up at once.
+- **Refuses a job rasterised for another roll** — the job's `ESC i z` is
+  checked against the loaded roll and a mismatch raises the `Replace media`
+  error a real printer raises, until the roll is changed. A kiosk set up for
+  the wrong label size is the likeliest misconfiguration there is; leave this
+  on.
+- **Roll loaded** — the common QL rolls, or a custom size through the API.
+- **Printing time per page** governs how long the status reports the printing
+  phase; **delay before each frame** makes a slow printer.
+
+The card also shows the status block as a poll would see it, counters
+(connections, frames, bytes, jobs, pages printed, status reads) and the last
+job: how many pages, how many printed, how many raster lines, what media it
+was rasterised for, and how it ended. **Test label** on the simulated
+printer's row works like on any printer, which is the quickest way to see the
+whole path — library, bridge, printer — on a machine with nothing plugged in.
+
+Whether the simulator is enabled is kept in `bridge.json`, so it survives a
+restart; its faults and counters do not, as a real printer's do not survive
+its power. `SIMULATED_PRINTER=true` in the environment enables it at every
+start, for a debugging deployment or a test harness. The printers API refuses
+to edit or remove it (`400`); the card's own API is `GET`/`PUT
+/api/admin/simulator` (`enabled`, `power`, `faults`, `media`, `printMs`,
+`frameDelayMs`, `checkMedia`), `POST /api/admin/simulator/restart` (`ms`),
+`POST /api/admin/simulator/reset`, and `GET /api/admin/simulator/label` for
+the bitmap. **Disable it before anyone prints for real** — a client that
+picks it prints nothing.
+
 ## The print log and statistics
 
 The dashboard's **Recent prints** card lists the last few jobs (five by
@@ -158,6 +209,7 @@ All via environment variables; the defaults suit the container.
 | `LOG_BUFFER` | `2000` | Log records kept in memory for the diagnostics bundle. |
 | `RECENT_JOBS` | `5` | Finished print jobs kept and shown on the dashboard. |
 | `JOB_IDLE_MS` | `3000` | Quiet time after which a job the client never reported on counts as sent. |
+| `SIMULATED_PRINTER` | `false` | Enable the simulated printer at start-up. The admin page can switch it either way at any time. |
 
 ## Security notes
 
@@ -217,7 +269,8 @@ the print log and get no reply.
 ```bash
 npm ci
 npm run typecheck
-npm test          # ~130 tests: SNMP codec, store, print log, HTTP admin API, the
-                  # relay end to end, and the relay under a slow, lossy printer link
+npm test          # ~175 tests: SNMP codec, store, print log, HTTP admin API, the
+                  # relay end to end, the relay under a slow, lossy printer link,
+                  # and the simulated printer
 npm run build
 ```
