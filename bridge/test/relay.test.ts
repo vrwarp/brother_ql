@@ -247,6 +247,44 @@ describe('handshake and auth', () => {
   });
 });
 
+describe('the print log under a slow printer', () => {
+  it('keeps a job open while the client polls status, and takes its report', async () => {
+    await startBridge({ JOB_IDLE_MS: '120' });
+    snmpReply = async () => STATUS_WAITING;
+    const id = await registerPrinter('snmp');
+    const client = await Client.connect(base);
+    await client.await('hello');
+    client.send({ type: 'auth', token: CLIENT });
+    await client.await('auth-ok');
+    client.send({ type: 'open', printerId: id });
+    await client.await('opened');
+    client.send({ type: 'job', pages: 1 });
+    client.sendBinary(Buffer.alloc(100));
+    await client.await('ack');
+    // The printer takes longer to confirm than the idle allowance; the client
+    // keeps asking, which is activity.
+    for (let i = 0; i < 6; i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 70));
+      const sent = new Promise<void>((resolve) => {
+        const check = (): void => {
+          if (client.binaryFrames.length > i) resolve();
+          else setTimeout(check, 5);
+        };
+        check();
+      });
+      client.send({ type: 'status' });
+      await sent;
+    }
+    expect(store.jobs).toHaveLength(0);
+    client.send({ type: 'job-done', pagesPrinted: 1, confirmation: 'phase' });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(store.jobs).toHaveLength(1);
+    expect(store.jobs[0]).toMatchObject({ outcome: 'printed', pagesPrinted: 1, confirmation: 'phase', frames: 1 });
+    expect(store.statsFor(id).labelsConfirmed).toBe(1);
+    client.close();
+  });
+});
+
 describe('opening and relaying', () => {
   async function connectAndOpen(statusMode: 'snmp' | 'tcp' | 'none' = 'snmp'): Promise<{ client: Client; id: string }> {
     const id = await registerPrinter(statusMode);

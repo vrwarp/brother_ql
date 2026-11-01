@@ -153,6 +153,34 @@ describe('snmpGet over loopback', () => {
     ).rejects.toThrow(/no value/);
   });
 
+  it('sends the request again within the budget, and takes the answer to whichever copy', async () => {
+    let requests = 0;
+    const port = await agentOn((oid, id) => {
+      requests += 1;
+      return requests === 1 ? null : buildResponse(id, oid, Buffer.from([7]));
+    });
+    const started = Date.now();
+    const value = await snmpGet({ host: '127.0.0.1', port, oid: BROTHER_STATUS_OID, timeoutMs: 1000, retransmitMs: 40 });
+    expect([...value]).toEqual([7]);
+    expect(requests).toBe(2);
+    expect(Date.now() - started).toBeLessThan(500);
+  });
+
+  it('stops resending once it has timed out', async () => {
+    let requests = 0;
+    const port = await agentOn(() => {
+      requests += 1;
+      return null;
+    });
+    await expect(
+      snmpGet({ host: '127.0.0.1', port, oid: BROTHER_STATUS_OID, timeoutMs: 100, retransmitMs: 30 }),
+    ).rejects.toThrow(/within 100 ms/);
+    const seen = requests;
+    expect(seen).toBeGreaterThanOrEqual(3);
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    expect(requests).toBe(seen);
+  });
+
   it('times out a silent agent', async () => {
     const port = await agentOn(() => null);
     await expect(

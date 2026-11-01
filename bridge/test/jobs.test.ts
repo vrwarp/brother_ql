@@ -104,6 +104,66 @@ describe('JobTracker', () => {
     }
   });
 
+  it('does not count a job idle while the printer is still taking a frame', () => {
+    vi.useFakeTimers();
+    try {
+      const { t, ended } = tracker(50);
+      t.hold(); // the write started before the job existed
+      t.frame(META, 1);
+      vi.advanceTimersByTime(200);
+      expect(ended).toHaveLength(0); // the clock is not running
+      t.release();
+      vi.advanceTimersByTime(40);
+      expect(ended).toHaveLength(0);
+      vi.advanceTimersByTime(20);
+      expect(ended).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('stops the clock when a write starts mid-job, and restarts it when taken', () => {
+    vi.useFakeTimers();
+    try {
+      const { t, ended } = tracker(50);
+      t.frame(META, 1);
+      vi.advanceTimersByTime(40);
+      t.hold();
+      vi.advanceTimersByTime(500);
+      expect(ended).toHaveLength(0);
+      t.frame(META, 1);
+      t.release();
+      vi.advanceTimersByTime(60);
+      expect(ended).toHaveLength(1);
+      expect(ended[0]?.frames).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('stays open while the client polls status, and takes the report at the end', () => {
+    vi.useFakeTimers();
+    try {
+      const { t, ended } = tracker(50);
+      t.announce(META, 1);
+      t.frame(META, 1);
+      for (let i = 0; i < 10; i += 1) {
+        vi.advanceTimersByTime(40);
+        t.touch(); // a status request
+        vi.advanceTimersByTime(5);
+        t.status(summarizeStatus(packet({ phase: 0x01 }))); // its answer
+      }
+      expect(ended).toHaveLength(0);
+      t.report(1, 'phase');
+      expect(ended[0]).toMatchObject({ outcome: 'printed', pagesPrinted: 1, confirmation: 'phase' });
+      t.touch(); // no job: nothing happens
+      vi.advanceTimersByTime(100);
+      expect(ended).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('ends a job as disconnected when disposed', () => {
     const { t, ended } = tracker();
     t.dispose(); // nothing in flight: nothing recorded

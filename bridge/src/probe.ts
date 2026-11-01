@@ -20,6 +20,7 @@ export interface ProbeResult {
 export interface ProbeOptions {
   connectTimeoutMs: number;
   snmpTimeoutMs: number;
+  snmpRetransmitMs?: number;
 }
 
 /** Open a TCP connection and close it again, reporting how long it took. */
@@ -85,10 +86,11 @@ export async function probeSnmpStatus(
   host: string,
   community: string,
   timeoutMs: number,
+  retransmitMs = 0,
 ): Promise<NonNullable<ProbeResult['status']>> {
   const started = Date.now();
   try {
-    const value = await snmpGet({ host, community, oid: BROTHER_STATUS_OID, timeoutMs });
+    const value = await snmpGet({ host, community, oid: BROTHER_STATUS_OID, timeoutMs, retransmitMs });
     if (!isStatusPacket(value)) {
       return {
         ok: false,
@@ -107,7 +109,12 @@ export async function probePrinter(printer: PrinterRecord, options: ProbeOptions
   const result: ProbeResult = { tcp };
   switch (printer.statusMode) {
     case 'snmp':
-      result.status = await probeSnmpStatus(printer.host, printer.snmpCommunity, options.snmpTimeoutMs);
+      result.status = await probeSnmpStatus(
+        printer.host,
+        printer.snmpCommunity,
+        options.snmpTimeoutMs,
+        options.snmpRetransmitMs ?? 0,
+      );
       break;
     case 'tcp':
       if (tcp.ok) result.status = await probeTcpStatus(printer.host, printer.port, options.snmpTimeoutMs);
